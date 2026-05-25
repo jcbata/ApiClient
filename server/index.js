@@ -9,7 +9,7 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));
 
 // SQLite Database Setup
 const dbPath = path.resolve(__dirname, 'database.sqlite');
@@ -66,6 +66,17 @@ const db = new sqlite3.Database(dbPath, (err) => {
         )`, () => {
           // Sync projects table with existing projects in saved_requests
           db.run(`INSERT OR IGNORE INTO projects (name) SELECT DISTINCT project FROM saved_requests`);
+        });
+
+        // Create folders table for nested folder support
+        db.run(`CREATE TABLE IF NOT EXISTS folders (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          project TEXT NOT NULL,
+          parent_id INTEGER,
+          name TEXT NOT NULL,
+          sort_order INTEGER DEFAULT 0
+        )`, () => {
+          db.run(`ALTER TABLE saved_requests ADD COLUMN folder_id INTEGER`, () => {});
         });
       }
     });
@@ -174,6 +185,70 @@ app.get('/api/requests', (req, res) => {
   });
 });
 
+app.post('/api/requests', (req, res) => {
+  const { name, project, method, url, headers, body, auth, bodyType, formParams, ignoreSSL, response, folderId } = req.body;
+  db.run(
+    `INSERT INTO saved_requests (name, project, method, url, headers, body, auth, body_type, form_params, ignore_ssl, response_status, response_time, response_data, response_headers, folder_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      name,
+      project || 'Default',
+      method,
+      url,
+      JSON.stringify(headers),
+      typeof body === 'string' ? body : JSON.stringify(body),
+      JSON.stringify(auth),
+      bodyType || 'raw',
+      formParams ? JSON.stringify(formParams) : null,
+      ignoreSSL ? 1 : 0,
+      response?.status ?? null,
+      response?.time ?? null,
+      response?.data ? JSON.stringify(response.data) : null,
+      response?.headers ? JSON.stringify(response.headers) : null,
+      folderId || null
+    ],
+    function(err) {
+      if (err) return res.status(500).json({ error: err.message });
+      res.json({ id: this.lastID, message: 'Request saved' });
+    }
+  );
+});
+
+app.put('/api/requests/:id', (req, res) => {
+  const { name, project, method, url, headers, body, auth, bodyType, formParams, ignoreSSL, response, folderId } = req.body;
+  db.run(
+    `UPDATE saved_requests SET name=?, project=?, method=?, url=?, headers=?, body=?, auth=?, body_type=?, form_params=?, ignore_ssl=?, response_status=?, response_time=?, response_data=?, response_headers=?, folder_id=?, timestamp=CURRENT_TIMESTAMP WHERE id=?`,
+    [
+      name,
+      project || 'Default',
+      method,
+      url,
+      JSON.stringify(headers),
+      typeof body === 'string' ? body : JSON.stringify(body),
+      JSON.stringify(auth),
+      bodyType || 'raw',
+      formParams ? JSON.stringify(formParams) : null,
+      ignoreSSL ? 1 : 0,
+      response?.status ?? null,
+      response?.time ?? null,
+      response?.data ? JSON.stringify(response.data) : null,
+      response?.headers ? JSON.stringify(response.headers) : null,
+      folderId || null,
+      req.params.id
+    ],
+    function(err) {
+      if (err) return res.status(500).json({ error: err.message });
+      res.json({ id: parseInt(req.params.id), message: 'Request updated' });
+    }
+  );
+});
+
+app.delete('/api/requests/:id', (req, res) => {
+  db.run(`DELETE FROM saved_requests WHERE id = ?`, [req.params.id], (err) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json({ message: 'Saved request deleted' });
+  });
+});
+
 app.post('/api/projects/reorder', (req, res) => {
   const { items } = req.body; // [{ name, sort_order }]
   if (!items || !Array.isArray(items)) return res.status(400).json({ error: 'Invalid items' });
@@ -211,20 +286,36 @@ app.post('/api/requests/reorder', (req, res) => {
 });
 
 app.post('/api/requests/move', (req, res) => {
-  const { id, project, targetId } = req.body;
-  
+  const { id, project, targetId, folderId } = req.body;
+
   db.serialize(() => {
     db.run('BEGIN TRANSACTION');
-    
-    // Update project for the item
-    db.run(`UPDATE saved_requests SET project = ? WHERE id = ?`, [project, id], (err) => {
+
+    const updates = ['project = ?'];
+    const params = [project];
+
+    if (folderId !== undefined) {
+      updates.push('folder_id = ?');
+      params.push(folderId || null);
+    }
+
+    params.push(id);
+    db.run(`UPDATE saved_requests SET ${updates.join(', ')} WHERE id = ?`, params, (err) => {
       if (err) {
         db.run('ROLLBACK');
         return res.status(500).json({ error: err.message });
       }
 
-      // Get all items in target project
-      db.all(`SELECT id FROM saved_requests WHERE project = ? ORDER BY sort_order ASC, timestamp DESC`, [project], (err, rows) => {
+      // Get all items in target project (and folder if specified)
+      let itemSql = `SELECT id FROM saved_requests WHERE project = ?`;
+      const itemParams = [project];
+      if (folderId !== undefined) {
+        itemSql += ` AND (folder_id = ? OR (folder_id IS NULL AND ? IS NULL))`;
+        itemParams.push(folderId, folderId);
+      }
+      itemSql += ` ORDER BY sort_order ASC, timestamp DESC`;
+
+      db.all(itemSql, itemParams, (err, rows) => {
         if (err) {
           db.run('ROLLBACK');
           return res.status(500).json({ error: err.message });
@@ -269,6 +360,40 @@ app.patch('/api/projects/rename', (req, res) => {
   });
 });
 
+app.delete('/api/projects/:name', (req, res) => {
+  const projectName = req.params.name;
+
+  db.serialize(() => {
+    db.run('BEGIN TRANSACTION');
+
+    db.run(`DELETE FROM saved_requests WHERE project = ?`, [projectName], (err) => {
+      if (err) {
+        db.run('ROLLBACK');
+        return res.status(500).json({ error: err.message });
+      }
+
+      db.run(`DELETE FROM folders WHERE project = ?`, [projectName], (err) => {
+        if (err) {
+          db.run('ROLLBACK');
+          return res.status(500).json({ error: err.message });
+        }
+
+        db.run(`DELETE FROM projects WHERE name = ?`, [projectName], (err) => {
+          if (err) {
+            db.run('ROLLBACK');
+            return res.status(500).json({ error: err.message });
+          }
+
+          db.run('COMMIT', (err) => {
+            if (err) return res.status(500).json({ error: err.message });
+            res.json({ message: 'Project deleted' });
+          });
+        });
+      });
+    });
+  });
+});
+
 app.patch('/api/requests/:id/project', (req, res) => {
   const { project } = req.body;
   db.run(`UPDATE saved_requests SET project = ? WHERE id = ?`, [project, req.params.id], (err) => {
@@ -277,6 +402,122 @@ app.patch('/api/requests/:id/project', (req, res) => {
   });
 });
 
+// Folder CRUD endpoints
+app.get('/api/folders', (req, res) => {
+  const { project } = req.query;
+  let sql = `SELECT * FROM folders`;
+  const params = [];
+  if (project) {
+    sql += ` WHERE project = ?`;
+    params.push(project);
+  }
+  sql += ` ORDER BY sort_order ASC`;
+  db.all(sql, params, (err, rows) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json(rows);
+  });
+});
+
+app.post('/api/folders', (req, res) => {
+  const { project, parent_id, name } = req.body;
+  if (!project || !name) return res.status(400).json({ error: 'project and name are required' });
+
+  db.run(
+    `INSERT INTO folders (project, parent_id, name) VALUES (?, ?, ?)`,
+    [project, parent_id || null, name],
+    function(err) {
+      if (err) return res.status(500).json({ error: err.message });
+      res.json({ id: this.lastID, message: 'Folder created' });
+    }
+  );
+});
+
+app.put('/api/folders/:id', (req, res) => {
+  const { name } = req.body;
+  if (!name) return res.status(400).json({ error: 'name is required' });
+
+  db.run(`UPDATE folders SET name = ? WHERE id = ?`, [name, req.params.id], function(err) {
+    if (err) return res.status(500).json({ error: err.message });
+    if (this.changes === 0) return res.status(404).json({ error: 'Folder not found' });
+    res.json({ message: 'Folder renamed' });
+  });
+});
+
+app.delete('/api/folders/:id', (req, res) => {
+  const folderId = req.params.id;
+
+  db.serialize(() => {
+    db.run('BEGIN TRANSACTION');
+
+    // Move requests in this folder to the parent folder or project root
+    db.get(`SELECT parent_id, project FROM folders WHERE id = ?`, [folderId], (err, folder) => {
+      if (err || !folder) {
+        db.run('ROLLBACK');
+        return res.status(404).json({ error: 'Folder not found' });
+      }
+
+      // Move subfolders up one level
+      db.run(`UPDATE folders SET parent_id = ? WHERE parent_id = ?`, [folder.parent_id, folderId]);
+
+      // Move requests to parent folder (or null if root)
+      db.run(`UPDATE saved_requests SET folder_id = ? WHERE folder_id = ?`, [folder.parent_id, folderId]);
+
+      // Delete the folder
+      db.run(`DELETE FROM folders WHERE id = ?`, [folderId], (err) => {
+        if (err) {
+          db.run('ROLLBACK');
+          return res.status(500).json({ error: err.message });
+        }
+        db.run('COMMIT', (err) => {
+          if (err) return res.status(500).json({ error: err.message });
+          res.json({ message: 'Folder deleted' });
+        });
+      });
+    });
+  });
+});
+
+app.post('/api/folders/reorder', (req, res) => {
+  const { items } = req.body; // [{ id, sort_order }]
+  if (!items || !Array.isArray(items)) return res.status(400).json({ error: 'Invalid items' });
+
+  db.serialize(() => {
+    db.run('BEGIN TRANSACTION');
+    const stmt = db.prepare(`UPDATE folders SET sort_order = ? WHERE id = ?`);
+    items.forEach(item => {
+      stmt.run(item.sort_order, item.id);
+    });
+    stmt.finalize();
+    db.run('COMMIT', (err) => {
+      if (err) return res.status(500).json({ error: err.message });
+      res.json({ message: 'Folders reordered' });
+    });
+  });
+});
+
+
+// Build nested folder items for Postman export
+const buildFolderItems = (folders, requests, parentId) => {
+  const items = [];
+
+  // Get child folders
+  const childFolders = folders.filter(f => f.parent_id === parentId);
+  childFolders.forEach(folder => {
+    const folderItem = {
+      name: folder.name,
+      item: buildFolderItems(folders, requests, folder.id)
+    };
+    items.push(folderItem);
+  });
+
+  // Get requests in this folder level
+  const folderRequests = requests.filter(r => r.folder_id === parentId);
+  folderRequests.forEach(row => {
+    items.push(toPostmanItem(row));
+  });
+
+  return items;
+};
 
 // Helper to transform SQLite row to Postman Item
 const toPostmanItem = (row) => {
@@ -319,30 +560,41 @@ const toPostmanItem = (row) => {
 };
 
 app.get('/api/export', (req, res) => {
-  db.all(`SELECT * FROM saved_requests ORDER BY project, timestamp DESC`, [], (err, rows) => {
+  db.all(`SELECT * FROM saved_requests ORDER BY project, sort_order ASC, timestamp DESC`, [], (err, rows) => {
     if (err) return res.status(500).json({ error: err.message });
 
-    const projects = {};
-    rows.forEach(row => {
-      const proj = row.project || 'Default';
-      if (!projects[proj]) projects[proj] = [];
-      projects[proj].push(row);
+    db.all(`SELECT * FROM folders ORDER BY sort_order ASC`, [], (err, folderRows) => {
+      if (err) return res.status(500).json({ error: err.message });
+
+      const projects = {};
+      rows.forEach(row => {
+        const proj = row.project || 'Default';
+        if (!projects[proj]) projects[proj] = [];
+        projects[proj].push(row);
+      });
+
+      const collection = {
+        info: {
+          name: 'API Client Export',
+          schema: 'https://schema.getpostman.com/json/collection/v2.1.0/collection.json'
+        },
+        item: Object.entries(projects).map(([projectName, requests]) => {
+          const projectFolders = folderRows.filter(f => f.project === projectName);
+          // Root-level requests (no folder) and root-level folders
+          const rootRequests = requests.filter(r => !r.folder_id);
+          const items = buildFolderItems(projectFolders, requests, null);
+          // Prepend root requests before folder items
+          return {
+            name: projectName,
+            item: [...rootRequests.map(toPostmanItem), ...items]
+          };
+        })
+      };
+
+      res.setHeader('Content-Type', 'application/json');
+      res.setHeader('Content-Disposition', 'attachment; filename=full-collection.json');
+      res.send(JSON.stringify(collection, null, 2));
     });
-
-    const collection = {
-      info: {
-        name: 'API Client Export',
-        schema: 'https://schema.getpostman.com/json/collection/v2.1.0/collection.json'
-      },
-      item: Object.entries(projects).map(([projectName, requests]) => ({
-        name: projectName,
-        item: requests.map(toPostmanItem)
-      }))
-    };
-
-    res.setHeader('Content-Type', 'application/json');
-    res.setHeader('Content-Disposition', 'attachment; filename=full-collection.json');
-    res.send(JSON.stringify(collection, null, 2));
   });
 });
 
@@ -366,20 +618,27 @@ app.get('/api/export/:id', (req, res) => {
 });
 
 app.get('/api/projects/:projectName/export', (req, res) => {
-  db.all(`SELECT * FROM saved_requests WHERE project = ? ORDER BY timestamp DESC`, [req.params.projectName], (err, rows) => {
+  db.all(`SELECT * FROM saved_requests WHERE project = ? ORDER BY sort_order ASC`, [req.params.projectName], (err, rows) => {
     if (err) return res.status(500).json({ error: err.message });
 
-    const collection = {
-      info: {
-        name: req.params.projectName,
-        schema: 'https://schema.getpostman.com/json/collection/v2.1.0/collection.json'
-      },
-      item: rows.map(toPostmanItem)
-    };
+    db.all(`SELECT * FROM folders WHERE project = ? ORDER BY sort_order ASC`, [req.params.projectName], (err, folderRows) => {
+      if (err) return res.status(500).json({ error: err.message });
 
-    res.setHeader('Content-Type', 'application/json');
-    res.setHeader('Content-Disposition', `attachment; filename="${req.params.projectName}.json"`);
-    res.send(JSON.stringify(collection, null, 2));
+      const rootRequests = rows.filter(r => !r.folder_id);
+      const items = buildFolderItems(folderRows, rows, null);
+
+      const collection = {
+        info: {
+          name: req.params.projectName,
+          schema: 'https://schema.getpostman.com/json/collection/v2.1.0/collection.json'
+        },
+        item: [...rootRequests.map(toPostmanItem), ...items]
+      };
+
+      res.setHeader('Content-Type', 'application/json');
+      res.setHeader('Content-Disposition', `attachment; filename="${req.params.projectName}.json"`);
+      res.send(JSON.stringify(collection, null, 2));
+    });
   });
 });
 
@@ -400,9 +659,48 @@ app.post('/api/import/check', (req, res) => {
   );
 });
 
+// Recursively create folders from import tree, calls onComplete when all done
+const createImportFolders = (folders, project, parentId, parentPath, folderMap, onComplete) => {
+  if (!folders || folders.length === 0) {
+    if (onComplete) onComplete();
+    return;
+  }
+
+  let pending = folders.length;
+  let hasError = false;
+
+  folders.forEach(f => {
+    const currentPath = parentPath ? `${parentPath}/${f.name}` : f.name;
+    db.run(`INSERT INTO folders (project, parent_id, name, sort_order) VALUES (?, ?, ?, ?)`,
+      [project, parentId, f.name, f.sort_order || 0],
+      function(err) {
+        if (err) {
+          hasError = true;
+          pending--;
+          if (pending === 0 && onComplete) onComplete();
+          return;
+        }
+        const folderId = this.lastID;
+        folderMap[currentPath] = folderId;
+        if (f.children && f.children.length > 0) {
+          createImportFolders(f.children, project, folderId, currentPath, folderMap, () => {
+            pending--;
+            if (pending === 0 && onComplete) onComplete();
+          });
+        } else {
+          pending--;
+          if (pending === 0 && onComplete) onComplete();
+        }
+      }
+    );
+  });
+};
+
 app.post('/api/import', (req, res) => {
-  const { items, mode } = req.body; // mode: 'overwrite' or 'skip'
+  const { items, mode, folders } = req.body; // mode: 'overwrite' or 'skip'
   if (!items || !Array.isArray(items)) return res.status(400).json({ error: 'Invalid items' });
+
+  const folderMap = {};
 
   let imported = 0;
   let updated = 0;
@@ -417,17 +715,18 @@ app.post('/api/import', (req, res) => {
     const item = items[processed];
     processed++;
 
+    const folderId = item.folderId || (item.folderPath ? folderMap[item.folderPath] : null) || null;
+
     db.get(`SELECT id FROM saved_requests WHERE name = ? AND project = ?`, [item.name, item.project], (err, row) => {
-      if (err) return runImport(); // skip error
+      if (err) return runImport();
 
       if (row) {
         if (mode === 'skip') {
           skipped++;
           runImport();
         } else {
-          // Update
           db.run(
-            `UPDATE saved_requests SET method=?, url=?, headers=?, body=?, auth=?, body_type=?, form_params=?, ignore_ssl=?, response_status=?, response_time=?, response_data=?, response_headers=?, timestamp=CURRENT_TIMESTAMP WHERE id=?`,
+            `UPDATE saved_requests SET method=?, url=?, headers=?, body=?, auth=?, body_type=?, form_params=?, ignore_ssl=?, response_status=?, response_time=?, response_data=?, response_headers=?, folder_id=?, timestamp=CURRENT_TIMESTAMP WHERE id=?`,
             [
               item.method, item.url, JSON.stringify(item.headers),
               typeof item.body === 'string' ? item.body : JSON.stringify(item.body),
@@ -436,15 +735,15 @@ app.post('/api/import', (req, res) => {
               item.ignoreSSL ? 1 : 0, item.response?.status ?? null,
               item.response?.time ?? null, item.response?.data ? JSON.stringify(item.response.data) : null,
               item.response?.headers ? JSON.stringify(item.response.headers) : null,
+              folderId,
               row.id
             ],
             () => { updated++; runImport(); }
           );
         }
       } else {
-        // Insert
         db.run(
-          `INSERT INTO saved_requests (name, project, method, url, headers, body, auth, body_type, form_params, ignore_ssl, response_status, response_time, response_data, response_headers) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO saved_requests (name, project, method, url, headers, body, auth, body_type, form_params, ignore_ssl, response_status, response_time, response_data, response_headers, folder_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             item.name, item.project, item.method, item.url, JSON.stringify(item.headers),
             typeof item.body === 'string' ? item.body : JSON.stringify(item.body),
@@ -452,7 +751,8 @@ app.post('/api/import', (req, res) => {
             item.formParams ? JSON.stringify(item.formParams) : null,
             item.ignoreSSL ? 1 : 0, item.response?.status ?? null,
             item.response?.time ?? null, item.response?.data ? JSON.stringify(item.response.data) : null,
-            item.response?.headers ? JSON.stringify(item.response.headers) : null
+            item.response?.headers ? JSON.stringify(item.response.headers) : null,
+            folderId
           ],
           () => { imported++; runImport(); }
         );
@@ -460,7 +760,22 @@ app.post('/api/import', (req, res) => {
     });
   };
 
-  runImport();
+  if (folders && folders.length > 0) {
+    const projects = [...new Set(items.map(i => i.project))];
+    let pendingProjects = projects.length;
+
+    projects.forEach(proj => {
+      const projFolders = folders.filter(f => !f.project || f.project === proj);
+      createImportFolders(projFolders, proj, null, null, folderMap, () => {
+        pendingProjects--;
+        if (pendingProjects === 0) {
+          runImport();
+        }
+      });
+    });
+  } else {
+    runImport();
+  }
 });
 
 app.listen(PORT, () => {

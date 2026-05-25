@@ -146,6 +146,102 @@ body {
   color: var(--accent-blue);
 }
 
+.delete-project-btn {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  padding: 2px 5px;
+  font-size: 0.85rem;
+  opacity: 0;
+  transition: opacity 0.2s, color 0.2s;
+}
+
+.project-header:hover .delete-project-btn {
+  opacity: 1;
+}
+
+.delete-project-btn:hover {
+  color: #f93e3e;
+}
+
+.icon-btn-sm {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 0.8rem;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 4px;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.icon-btn-sm:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text-main);
+}
+
+.item-actions {
+  display: flex;
+  gap: 0.2rem;
+  align-items: center;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.history-item:hover .item-actions {
+  opacity: 1;
+}
+
+.action-btn {
+  margin: 0;
+}
+
+/* Import Modal */
+.import-modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 3000;
+}
+
+.import-modal {
+  background: var(--bg-header);
+  border: 1px solid var(--border-color);
+  padding: 2rem;
+  border-radius: 8px;
+  max-width: 400px;
+  width: 90%;
+  box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+}
+
+.import-modal h3 {
+  margin-top: 0;
+  color: var(--accent-blue);
+}
+
+.import-modal p {
+  color: var(--text-dim);
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.import-modal-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+  margin-top: 1.5rem;
+}
+
 .history-item.draggable {
   cursor: grab;
 }
@@ -538,4 +634,67 @@ body {
 
 .history-item:hover .delete-item-btn {
   opacity: 1;
+}
+
+/* Folder UI Styles */
+.folder-group {
+  margin: 1px 0;
+}
+
+.folder-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.4rem 0.5rem;
+  border-radius: 4px;
+  cursor: grab;
+  font-size: 0.85rem;
+  transition: background 0.2s;
+}
+
+.folder-header:active {
+  cursor: grabbing;
+}
+
+.folder-header-main {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  flex: 1;
+  cursor: pointer;
+}
+
+.folder-header:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.folder-icon {
+  font-size: 0.8rem;
+  margin-right: 2px;
+}
+
+.folder-items {
+  padding-left: 0.3rem;
+  margin-top: 1px;
+}
+
+.icon-btn-xs {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 0.7rem;
+  cursor: pointer;
+  padding: 1px 3px;
+  border-radius: 3px;
+  opacity: 0;
+  transition: all 0.2s;
+}
+
+.folder-header:hover .icon-btn-xs {
+  opacity: 1;
+}
+
+.icon-btn-xs:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text-main);
 }
