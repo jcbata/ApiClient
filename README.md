@@ -5,13 +5,15 @@ A web-based API client (similar to Postman) to test and interact with REST APIs 
 ## Features
 
 - **HTTP Methods**: GET, POST, PUT, DELETE, PATCH
-- **Request Builder**: URL, headers, body (raw / form-urlencoded), auth (Bearer Token, Basic Auth, API Key)
+- **Request Builder**: URL, headers, body (raw / form-urlencoded / multipart/form-data), auth (Bearer Token, Basic Auth, API Key)
+- **Multipart Upload**: Attach text fields and files (base64-encoded) in multipart/form-data requests
 - **Response Viewer**: JSON, XML, HTML, Text with syntax highlighting
 - **History**: Auto-saves every request with response
-- **Saved Requests**: Name and persist requests organized by projects
-- **Import/Export**: Full compatibility with Postman Collection v2.1 format
+- **Saved Requests**: Name and persist requests organized by projects and nested folders
+- **Import/Export**: Full compatibility with Postman Collection v2.1 format (including formdata mode)
 - **Drag & Drop**: Reorder endpoints within projects and rearrange projects
 - **SSL Bypass**: Ignore SSL certificate errors for local/dev APIs
+- **Copy as cURL**: Generate cURL commands with `-F` flags for multipart requests
 - **Dark Theme**: Professional dark UI with responsive design
 
 ## Tech Stack

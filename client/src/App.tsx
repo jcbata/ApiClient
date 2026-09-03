@@ -1,13 +1,44 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import './App.css';
 
 type Method = 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
 type ResponseTab = 'JSON' | 'Text' | 'HTML' | 'XML' | 'Headers';
+type ConfigTab = 'Headers' | 'Auth' | 'Body';
 
 interface KeyValue {
   key: string;
   value: string;
 }
+
+interface MultipartParam {
+  type: 'text' | 'file';
+  key: string;
+  value: string;
+  fileName?: string;
+  fileData?: string;
+  mimeType?: string;
+}
+
+interface ApiTab {
+  id: string;
+  name: string;
+  method: Method;
+  url: string;
+  headers: KeyValue[];
+  auth: { type: string; token: string; username: string; password: string; key: string; value: string; addTo: string };
+  body: string;
+  bodyType: 'raw' | 'form-urlencoded' | 'multipart';
+  formParams: KeyValue[];
+  multipartParams: MultipartParam[];
+  ignoreSSL: boolean;
+  activeConfigTab: ConfigTab;
+  activeResTab: ResponseTab;
+  response: any;
+  savedRequestId?: number;
+  hasUnsavedChanges: boolean;
+}
+
+const STORAGE_KEY = 'apiClient_tabs';
 
 const commonHeaders: Record<string, string[]> = {
   'Content-Type': ['application/json', 'application/xml', 'text/plain', 'text/html', 'application/x-www-form-urlencoded', 'multipart/form-data'],
@@ -21,8 +52,8 @@ const commonHeaders: Record<string, string[]> = {
   'Connection': ['keep-alive', 'close', 'upgrade'],
   'User-Agent': ['Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36', 'PostmanRuntime/7.43.0', 'curl/8.0'],
   'X-Requested-With': ['XMLHttpRequest'],
-  'Origin': ['http://localhost:5173', 'http://localhost:3001'],
-  'Referer': ['http://localhost:5173/', 'http://localhost:3001/'],
+  'Origin': ['http://localhost:5173', ''],
+  'Referer': ['http://localhost:5173/', '/'],
   'Host': ['localhost:3001', 'localhost:5173', 'api.example.com'],
   'Cookie': [''],
   'Content-Length': [''],
@@ -37,21 +68,65 @@ const commonHeaders: Record<string, string[]> = {
 
 const allHeaderNames = Object.keys(commonHeaders);
 
+const defaultAuth = { type: 'none', token: '', username: '', password: '', key: '', value: '', addTo: 'header' };
+
+function createDefaultTab(): ApiTab {
+  return {
+    id: crypto.randomUUID(),
+    name: 'New Request',
+    method: 'GET',
+    url: '',
+    headers: [{ key: '', value: '' }],
+    auth: { ...defaultAuth },
+    body: '',
+    bodyType: 'raw',
+    formParams: [{ key: '', value: '' }],
+    multipartParams: [{ type: 'text', key: '', value: '' }],
+    ignoreSSL: false,
+    activeConfigTab: 'Headers',
+    activeResTab: 'JSON',
+    response: null,
+    hasUnsavedChanges: false,
+  };
+}
+
+function saveTabsToStorage(tabs: ApiTab[], activeTabIndex: number) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ tabs, activeTabIndex }));
+  } catch (e) {
+    console.error('Failed to save tabs:', e);
+  }
+}
+
+function loadTabsFromStorage(): { tabs: ApiTab[]; activeTabIndex: number } | null {
+  try {
+    const data = localStorage.getItem(STORAGE_KEY);
+    if (data) return JSON.parse(data);
+  } catch (e) {
+    console.error('Failed to load tabs:', e);
+  }
+  return null;
+}
+
 function App() {
-  const [method, setMethod] = useState<Method>('GET');
-  const [url, setUrl] = useState('');
-  const [headers, setHeaders] = useState<KeyValue[]>([{ key: '', value: '' }]);
-  const [auth, setAuth] = useState({ type: 'none', token: '', username: '', password: '', key: '', value: '', addTo: 'header' });
-  const [body, setBody] = useState('');
-  const [bodyType, setBodyType] = useState<'raw' | 'form-urlencoded'>('raw');
-  const [formParams, setFormParams] = useState<KeyValue[]>([{ key: '', value: '' }]);
-  const [activeTab, setActiveTab] = useState<'Headers' | 'Auth' | 'Body'>('Headers');
-  const [ignoreSSL, setIgnoreSSL] = useState(false);
-  const [response, setResponse] = useState<any>(null);
-  const [activeResTab, setActiveResTab] = useState<ResponseTab>('JSON');
+  const [tabs, setTabs] = useState<ApiTab[]>(() => {
+    const saved = loadTabsFromStorage();
+    const loadedTabs = saved?.tabs?.length ? saved.tabs : [createDefaultTab()];
+    return loadedTabs.map(tab => ({
+      ...tab,
+      multipartParams: tab.multipartParams || [{ type: 'text', key: '', value: '' }],
+    }));
+  });
+  const [activeTabIndex, setActiveTabIndex] = useState<number>(() => {
+    const saved = loadTabsFromStorage();
+    if (saved && saved.activeTabIndex >= 0 && saved.activeTabIndex < (saved.tabs?.length || 0)) {
+      return saved.activeTabIndex;
+    }
+    return 0;
+  });
+
   const [history, setHistory] = useState<any[]>([]);
   const [savedRequests, setSavedRequests] = useState<any[]>([]);
-  const [editingSavedId, setEditingSavedId] = useState<number | null>(null);
   const [dragOverItemId, setDragOverItemId] = useState<number | null>(null);
   const [sidebarTab, setSidebarTab] = useState<'History' | 'Saved'>('Saved');
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
@@ -60,10 +135,76 @@ function App() {
   const [expandedProjects, setExpandedProjects] = useState<Record<string, boolean>>({ Default: true });
   const [folders, setFolders] = useState<any[]>([]);
   const [expandedFolders, setExpandedFolders] = useState<Record<number, boolean>>({});
+  const [isSending, setIsSending] = useState(false);
   const [importModal, setImportModal] = useState<{ show: boolean, items: any[], conflicts: any[], folderTree?: any[] }>({ show: false, items: [], conflicts: [] });
 
   const isResizing = useRef(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const tabsContainerRef = useRef<HTMLDivElement>(null);
+
+  const activeTab = tabs[activeTabIndex] || tabs[0];
+
+  const updateActiveTab = useCallback((updates: Partial<ApiTab>) => {
+    setTabs(prev => prev.map((tab, i) =>
+      i === activeTabIndex ? { ...tab, ...updates } : tab
+    ));
+  }, [activeTabIndex]);
+
+  const addTab = useCallback((tabData?: Partial<ApiTab>) => {
+    const newTab = { ...createDefaultTab(), ...tabData };
+    setTabs(prev => {
+      const next = [...prev, newTab];
+      setActiveTabIndex(next.length - 1);
+      return next;
+    });
+  }, []);
+
+  const closeTab = useCallback((index: number) => {
+    setTabs(prev => {
+      const tab = prev[index];
+      if (tab.hasUnsavedChanges) {
+        if (!window.confirm(`"${tab.name}" has unsaved changes. Close anyway?`)) return prev;
+      }
+      if (prev.length === 1) return prev;
+      const next = prev.filter((_, i) => i !== index);
+      setActiveTabIndex(prevIdx => {
+        if (index < prevIdx) return prevIdx - 1;
+        if (index === prevIdx && prevIdx >= next.length) return next.length - 1;
+        return Math.min(prevIdx, next.length - 1);
+      });
+      return next;
+    });
+  }, []);
+
+  useEffect(() => {
+    saveTabsToStorage(tabs, activeTabIndex);
+  }, [tabs, activeTabIndex]);
+
+  useEffect(() => {
+    const container = tabsContainerRef.current;
+    if (!container) return;
+    const handleWheel = (e: WheelEvent) => {
+      if (e.deltaY !== 0) {
+        e.preventDefault();
+        container.scrollLeft += e.deltaY;
+      }
+    };
+    container.addEventListener('wheel', handleWheel, { passive: false });
+    return () => container.removeEventListener('wheel', handleWheel);
+  }, [tabs]);
+
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      saveTabsToStorage(tabs, activeTabIndex);
+      const hasUnsaved = tabs.some(tab => tab.hasUnsavedChanges);
+      if (hasUnsaved) {
+        e.preventDefault();
+        e.returnValue = '';
+      }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [tabs, activeTabIndex]);
 
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
@@ -104,7 +245,6 @@ function App() {
     setExpandedFolders(prev => ({ ...prev, [folderId]: !prev[folderId] }));
   };
 
-  // Build a tree of folders for a given project
   const buildFolderTree = (projectName: string) => {
     const projectFolders = folders.filter(f => f.project === projectName);
     const buildChildren = (parentId: number | null): any[] => {
@@ -119,21 +259,14 @@ function App() {
     return buildChildren(null);
   };
 
-  // Get all folder IDs in a project (flat list for lookup)
-  const getProjectFolderIds = (projectName: string): number[] => {
-    return folders.filter(f => f.project === projectName).map(f => f.id);
-  };
-
-  // Get requests that belong directly to a folder (or root)
   const getFolderRequests = (requests: any[], folderId: number | null) => {
     return requests.filter(r => (r.folder_id || null) === folderId);
   };
 
-  // Folder CRUD
   const handleCreateFolder = async (project: string, name: string, parentId?: number | null) => {
     if (!name) return;
     try {
-      const res = await fetch('http://localhost:3001/api/folders', {
+      const res = await fetch('/api/folders', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ project, name, parent_id: parentId || null })
@@ -150,7 +283,7 @@ function App() {
     const name = prompt('Enter new folder name:', currentName);
     if (!name || name === currentName) return;
     try {
-      const res = await fetch(`http://localhost:3001/api/folders/${id}`, {
+      const res = await fetch(`/api/folders/${id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name })
@@ -166,7 +299,7 @@ function App() {
   const handleDeleteFolder = async (id: number) => {
     if (!confirm('Delete this folder and move its contents up?')) return;
     try {
-      const res = await fetch(`http://localhost:3001/api/folders/${id}`, {
+      const res = await fetch(`/api/folders/${id}`, {
         method: 'DELETE'
       });
       if (!res.ok) throw new Error('Failed to delete folder');
@@ -186,7 +319,7 @@ function App() {
 
   const fetchHistory = async () => {
     try {
-      const res = await fetch('http://localhost:3001/api/history');
+      const res = await fetch('/api/history');
       const data = await res.json();
       setHistory(data);
     } catch (e) {
@@ -196,7 +329,7 @@ function App() {
 
   const fetchSavedRequests = async () => {
     try {
-      const res = await fetch('http://localhost:3001/api/requests');
+      const res = await fetch('/api/requests');
       const data = await res.json();
       setSavedRequests(data);
     } catch (e) {
@@ -206,10 +339,10 @@ function App() {
 
   const fetchFolders = async (project?: string) => {
     try {
-      const url = project
-        ? `http://localhost:3001/api/folders?project=${encodeURIComponent(project)}`
-        : 'http://localhost:3001/api/folders';
-      const res = await fetch(url);
+      const folderUrl = project
+        ? `/api/folders?project=${encodeURIComponent(project)}`
+        : '/api/folders';
+      const res = await fetch(folderUrl);
       const data = await res.json();
       setFolders(data);
     } catch (e) {
@@ -218,90 +351,105 @@ function App() {
   };
 
   const handleLoadRequest = (item: any, isSaved?: boolean) => {
-    setEditingSavedId(isSaved ? item.id : null);
-    setMethod(item.method as Method);
-    setUrl(item.url);
-    
-    // Parse headers
-    try {
-      const parsedHeaders = JSON.parse(item.headers || '{}');
-      const headerArray = Object.entries(parsedHeaders).map(([key, value]) => ({ key, value: value as string }));
-      setHeaders(headerArray.length > 0 ? headerArray : [{ key: '', value: '' }]);
-    } catch (e) {
-      setHeaders([{ key: '', value: '' }]);
+    if (isSaved && item.id) {
+      const existingIndex = tabs.findIndex(t => t.savedRequestId === item.id);
+      if (existingIndex >= 0) {
+        setActiveTabIndex(existingIndex);
+        return;
+      }
     }
 
-    // Parse body
+    let parsedHeaders: KeyValue[];
+    try {
+      const parsed = JSON.parse(item.headers || '{}');
+      parsedHeaders = Object.entries(parsed).map(([key, value]) => ({ key, value: value as string }));
+      if (parsedHeaders.length === 0) parsedHeaders = [{ key: '', value: '' }];
+    } catch {
+      parsedHeaders = [{ key: '', value: '' }];
+    }
+
+    let parsedBody = '';
     try {
       if (item.body && item.body !== 'null' && item.body !== 'undefined') {
-        const parsedBody = typeof item.body === 'string' && (item.body.startsWith('{') || item.body.startsWith('[')) 
+        parsedBody = typeof item.body === 'string' && (item.body.startsWith('{') || item.body.startsWith('['))
           ? JSON.stringify(JSON.parse(item.body), null, 2)
           : item.body;
-        setBody(parsedBody);
-      } else {
-        setBody('');
       }
-    } catch (e) {
-      setBody(item.body || '');
+    } catch {
+      parsedBody = item.body || '';
     }
 
-    // Parse auth
+    let parsedAuth = { ...defaultAuth };
     try {
-      const parsedAuth = JSON.parse(item.auth || 'null');
-      if (parsedAuth) {
-        setAuth(parsedAuth);
-      } else {
-        setAuth({ type: 'none', token: '', username: '', password: '', key: '', value: '', addTo: 'header' });
-      }
-    } catch (e) {
-      setAuth({ type: 'none', token: '', username: '', password: '', key: '', value: '', addTo: 'header' });
-    }
+      const parsed = JSON.parse(item.auth || 'null');
+      if (parsed) parsedAuth = parsed;
+    } catch {}
 
-    // Restore bodyType and formParams
-    if (item.body_type) {
-      setBodyType(item.body_type);
-    }
+    let parsedFormParams: KeyValue[] = [{ key: '', value: '' }];
     if (item.form_params) {
       try {
         const parsed = JSON.parse(item.form_params);
-        setFormParams(Array.isArray(parsed) && parsed.length > 0 ? parsed : [{ key: '', value: '' }]);
-      } catch (e) {
-        setFormParams([{ key: '', value: '' }]);
-      }
-    } else {
-      setFormParams([{ key: '', value: '' }]);
+        if (Array.isArray(parsed) && parsed.length > 0) parsedFormParams = parsed;
+      } catch {}
     }
 
-    // Restore ignoreSSL
-    setIgnoreSSL(item.ignore_ssl ? true : false);
+    let parsedMultipartParams: MultipartParam[] = [{ type: 'text', key: '', value: '' }];
+    if (item.multipart_params) {
+      try {
+        const parsed = JSON.parse(item.multipart_params);
+        if (Array.isArray(parsed) && parsed.length > 0) parsedMultipartParams = parsed;
+      } catch {}
+    }
 
-    // Restore response if available
+    let parsedResponse = null;
     if (item.response_data) {
       try {
-        setResponse({
+        parsedResponse = {
           status: item.response_status ?? item.status,
           time: item.response_time ?? item.time,
           data: JSON.parse(item.response_data),
-          headers: JSON.parse(item.response_headers || '{}')
-        });
-      } catch (e) {
-        console.error('Failed to parse response data');
-      }
-    } else {
-      setResponse(null);
+          headers: JSON.parse(item.response_headers || '{}'),
+          timestamp: item.timestamp
+        };
+      } catch {}
     }
+
+    const displayName = isSaved && item.name
+      ? item.name
+      : (item.url || '').slice(0, 30);
+
+    const newTab: ApiTab = {
+      id: crypto.randomUUID(),
+      name: displayName,
+      method: item.method as Method,
+      url: item.url || '',
+      headers: parsedHeaders,
+      auth: parsedAuth,
+      body: parsedBody,
+      bodyType: item.body_type || 'raw',
+      formParams: parsedFormParams,
+      multipartParams: parsedMultipartParams,
+      ignoreSSL: item.ignore_ssl || false,
+      activeConfigTab: 'Headers',
+      activeResTab: 'JSON',
+      response: parsedResponse,
+      savedRequestId: isSaved ? item.id : undefined,
+      hasUnsavedChanges: false,
+    };
+
+    addTab(newTab);
   };
 
   const handleExport = () => {
-    window.location.href = 'http://localhost:3001/api/export';
+    window.location.href = '/api/export';
   };
 
   const handleExportProject = (projectName: string) => {
-    window.location.href = `http://localhost:3001/api/projects/${encodeURIComponent(projectName)}/export`;
+    window.location.href = `/api/projects/${encodeURIComponent(projectName)}/export`;
   };
 
   const handleExportItem = (id: number) => {
-    window.location.href = `http://localhost:3001/api/export/${id}`;
+    window.location.href = `/api/export/${id}`;
   };
 
   const handleImportClick = () => {
@@ -317,13 +465,9 @@ function App() {
 
       postmanItems.forEach(item => {
         if (item.item) {
-          // This is a folder
           const folderName = item.name || 'Untitled Folder';
           const currentPath = parentPath ? `${parentPath}/${folderName}` : folderName;
-
-          // Recursively process children
           const children = processItems(item.item, currentPath);
-
           folderNodes.push({
             name: folderName,
             project,
@@ -337,8 +481,9 @@ function App() {
           const headerArray = Array.isArray(req.header) ? req.header.map((h: any) => ({ key: h.key, value: h.value })) : [];
 
           let body = '';
-          let bodyType: 'raw' | 'form-urlencoded' = 'raw';
+          let bodyType: 'raw' | 'form-urlencoded' | 'multipart' = 'raw';
           let formParams: KeyValue[] = [{ key: '', value: '' }];
+          let multipartParams: MultipartParam[] = [{ type: 'text', key: '', value: '' }];
 
           if (req.body) {
             if (req.body.mode === 'raw') {
@@ -348,15 +493,28 @@ function App() {
               formParams = (req.body.urlencoded || []).map((p: any) => ({ key: p.key, value: p.value }));
               if (formParams.length === 0) formParams = [{ key: '', value: '' }];
             } else if (req.body.mode === 'formdata') {
-              bodyType = 'form-urlencoded';
-              formParams = (req.body.formdata || [])
-                .filter((p: any) => p.type === 'text')
-                .map((p: any) => ({ key: p.key, value: p.value }));
-              if (formParams.length === 0) formParams = [{ key: '', value: '' }];
+              const formdataItems = req.body.formdata || [];
+              const hasFiles = formdataItems.some((p: any) => p.type === 'file');
+              if (hasFiles) {
+                bodyType = 'multipart';
+                multipartParams = formdataItems.map((p: any) => ({
+                  type: p.type === 'file' ? 'file' as const : 'text' as const,
+                  key: p.key,
+                  value: p.value || '',
+                  fileName: p.src || undefined,
+                }));
+                if (multipartParams.length === 0) multipartParams = [{ type: 'text', key: '', value: '' }];
+              } else {
+                bodyType = 'form-urlencoded';
+                formParams = formdataItems
+                  .filter((p: any) => p.type === 'text')
+                  .map((p: any) => ({ key: p.key, value: p.value }));
+                if (formParams.length === 0) formParams = [{ key: '', value: '' }];
+              }
             }
           }
 
-          let auth = { type: 'none', token: '', username: '', password: '', key: '', value: '', addTo: 'header' };
+          let auth = { ...defaultAuth };
           if (req.auth) {
             const atype = req.auth.type;
             if (atype === 'bearer') {
@@ -383,6 +541,7 @@ function App() {
             body,
             bodyType,
             formParams,
+            multipartParams,
             auth: auth.type === 'none' ? null : auth
           });
         }
@@ -397,7 +556,7 @@ function App() {
 
   const performImport = async (items: any[], mode: 'overwrite' | 'skip', folderTree?: any[]) => {
     try {
-      const res = await fetch('http://localhost:3001/api/import', {
+      const res = await fetch('/api/import', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ items, mode, folders: folderTree || [] })
@@ -424,8 +583,7 @@ function App() {
       const projectName = collection.info.name || 'Imported';
       const { items, folderTree } = parsePostmanCollection(collection.item, projectName);
 
-      // Check for conflicts
-      const checkRes = await fetch('http://localhost:3001/api/import/check', {
+      const checkRes = await fetch('/api/import/check', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ items })
@@ -445,12 +603,12 @@ function App() {
   };
 
   const handleSaveRequest = async () => {
-    const current = editingSavedId ? savedRequests.find(r => r.id === editingSavedId) : null;
-    const name = prompt('Enter a name for this request:', current?.name || '');
+    const tab = activeTab;
+    const current = tab.savedRequestId ? savedRequests.find(r => r.id === tab.savedRequestId) : null;
+    const name = prompt('Enter a name for this request:', current?.name || tab.name);
     if (!name) return;
     const project = prompt('Enter project name (leave empty for "Default"):', current?.project || '') || 'Default';
 
-    // Ask for optional folder path
     const projectFolders = folders.filter(f => f.project === project);
     let folderId: number | null = current?.folder_id || null;
     if (projectFolders.length > 0) {
@@ -466,18 +624,19 @@ function App() {
       }
     }
 
-    const headerObj = headers.reduce((acc, curr) => {
+    const headerObj = tab.headers.reduce((acc, curr) => {
       if (curr.key) acc[curr.key] = curr.value;
       return acc;
     }, {} as any);
 
-    const validFormParams = formParams.filter(p => p.key);
+    const validFormParams = tab.formParams.filter(p => p.key);
+    const validMultipartParams = tab.multipartParams.filter(p => p.key);
 
     try {
-      const endpoint = editingSavedId
-        ? `http://localhost:3001/api/requests/${editingSavedId}`
-        : 'http://localhost:3001/api/requests';
-      const httpMethod = editingSavedId ? 'PUT' : 'POST';
+      const endpoint = tab.savedRequestId
+        ? `/api/requests/${tab.savedRequestId}`
+        : '/api/requests';
+      const httpMethod = tab.savedRequestId ? 'PUT' : 'POST';
 
       const res = await fetch(endpoint, {
         method: httpMethod,
@@ -485,22 +644,28 @@ function App() {
         body: JSON.stringify({
           name,
           project,
-          method,
-          url,
+          method: tab.method,
+          url: tab.url,
           headers: headerObj,
-          body,
-          bodyType,
+          body: tab.body,
+          bodyType: tab.bodyType,
           formParams: validFormParams,
-          ignoreSSL,
-          auth: auth.type === 'none' ? null : auth,
-          response,
+          multipartParams: validMultipartParams,
+          ignoreSSL: tab.ignoreSSL,
+          auth: tab.auth.type === 'none' ? null : tab.auth,
+          response: tab.response,
           folderId
         })
       });
       if (!res.ok) throw new Error('Failed to save request');
-      setEditingSavedId(null);
+      const savedItem = await res.json();
       fetchSavedRequests();
-      showToast(editingSavedId ? 'Request updated successfully' : 'Request saved successfully');
+      updateActiveTab({
+        savedRequestId: savedItem.id || tab.savedRequestId,
+        name: name,
+        hasUnsavedChanges: false
+      });
+      showToast(tab.savedRequestId ? 'Request updated successfully' : 'Request saved successfully');
     } catch (e: any) {
       showToast(e.message, 'error');
     }
@@ -509,7 +674,7 @@ function App() {
   const handleDeleteHistory = async (id?: number) => {
     if (!id && !confirm('Clear all history?')) return;
     try {
-      await fetch(`http://localhost:3001/api/history${id ? `/${id}` : ''}`, { method: 'DELETE' });
+      await fetch(`/api/history${id ? `/${id}` : ''}`, { method: 'DELETE' });
       fetchHistory();
       showToast(id ? 'History item deleted' : 'History cleared');
     } catch (e) {
@@ -520,7 +685,7 @@ function App() {
   const handleDeleteSaved = async (id: number) => {
     if (!confirm('Delete this saved request?')) return;
     try {
-      await fetch(`http://localhost:3001/api/requests/${id}`, { method: 'DELETE' });
+      await fetch(`/api/requests/${id}`, { method: 'DELETE' });
       fetchSavedRequests();
       showToast('Saved request deleted');
     } catch (e) {
@@ -533,7 +698,7 @@ function App() {
     if (!newName || newName === oldName) return;
 
     try {
-      const res = await fetch('http://localhost:3001/api/projects/rename', {
+      const res = await fetch('/api/projects/rename', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ oldName, newName })
@@ -549,7 +714,7 @@ function App() {
   const handleDeleteProject = async (projectName: string) => {
     if (!confirm(`Delete entire project "${projectName}" and all its requests and folders?`)) return;
     try {
-      const res = await fetch(`http://localhost:3001/api/projects/${encodeURIComponent(projectName)}`, {
+      const res = await fetch(`/api/projects/${encodeURIComponent(projectName)}`, {
         method: 'DELETE'
       });
       if (!res.ok) throw new Error('Failed to delete project');
@@ -577,7 +742,6 @@ function App() {
     const sourceProject = e.dataTransfer.getData('projectName');
     if (!sourceProject || sourceProject === targetProject) return;
 
-    // Get current order of projects
     const projectNames = Object.keys(groupedRequests);
     const sourceIdx = projectNames.indexOf(sourceProject);
     const targetIdx = projectNames.indexOf(targetProject);
@@ -588,7 +752,7 @@ function App() {
     newOrder.splice(adjustedTarget, 0, sourceProject);
 
     try {
-      const res = await fetch(`http://localhost:3001/api/projects/reorder`, {
+      const res = await fetch(`/api/projects/reorder`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
@@ -608,7 +772,7 @@ function App() {
     if (!requestId) return;
 
     try {
-      const res = await fetch(`http://localhost:3001/api/requests/move`, {
+      const res = await fetch(`/api/requests/move`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id: requestId, project: targetProject })
@@ -629,7 +793,7 @@ function App() {
     if (!requestId || parseInt(requestId) === targetId) return;
 
     try {
-      const res = await fetch(`http://localhost:3001/api/requests/move`, {
+      const res = await fetch(`/api/requests/move`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id: requestId, project: targetProject, targetId })
@@ -641,66 +805,251 @@ function App() {
     }
   };
 
+  const handleCopyAsCurl = () => {
+    const tab = activeTab;
+    if (!tab.url) {
+      showToast('Enter a URL first', 'error');
+      return;
+    }
+
+    const headerObj = tab.headers.reduce((acc, curr) => {
+      if (curr.key) acc[curr.key] = curr.value;
+      return acc;
+    }, {} as Record<string, string>);
+
+    let curl = `curl -X ${tab.method}`;
+
+    Object.entries(headerObj).forEach(([k, v]) => {
+      curl += ` \\\n  -H "${k}: ${v}"`;
+    });
+
+    if (tab.auth.type === 'bearer' && tab.auth.token) {
+      curl += ` \\\n  -H "Authorization: Bearer ${tab.auth.token}"`;
+    } else if (tab.auth.type === 'basic' && tab.auth.username) {
+      const encoded = btoa(`${tab.auth.username}:${tab.auth.password}`);
+      curl += ` \\\n  -H "Authorization: Basic ${encoded}"`;
+    } else if (tab.auth.type === 'apikey' && tab.auth.key) {
+      if (tab.auth.addTo === 'header') {
+        curl += ` \\\n  -H "${tab.auth.key}: ${tab.auth.value}"`;
+      } else {
+        const separator = tab.url.includes('?') ? '&' : '?';
+        curl += `${separator}${encodeURIComponent(tab.auth.key)}=${encodeURIComponent(tab.auth.value)}`;
+      }
+    }
+
+    if (tab.method !== 'GET' && tab.body) {
+      const bodyStr = tab.bodyType === 'form-urlencoded'
+        ? tab.formParams.filter(p => p.key).map(p => `${encodeURIComponent(p.key)}=${encodeURIComponent(p.value)}`).join('&')
+        : tab.bodyType === 'multipart'
+        ? ''
+        : tab.body;
+      if (tab.bodyType === 'multipart') {
+        tab.multipartParams.filter(p => p.key).forEach(p => {
+          if (p.type === 'file') {
+            curl += ` \\\n  -F "${p.key}=@${p.fileName || 'file'}"`;
+          } else {
+            curl += ` \\\n  -F "${p.key}=${p.value}"`;
+          }
+        });
+      } else if (bodyStr) {
+        curl += ` \\\n  -d '${bodyStr.replace(/'/g, "'\\''")}'`;
+      }
+    }
+
+    curl += ` \\\n  '${tab.url}'`;
+
+    navigator.clipboard.writeText(curl).then(() => {
+      showToast('cURL copied to clipboard');
+    }).catch(() => {
+      showToast('Failed to copy to clipboard', 'error');
+    });
+  };
+
   const handleSend = async () => {
-    if (!url) {
+    const tab = activeTab;
+    if (!tab.url) {
       showToast('Please enter a URL', 'error');
       return;
     }
 
-    const headerObj = headers.reduce((acc, curr) => {
+    setIsSending(true);
+
+    const headerObj = tab.headers.reduce((acc, curr) => {
       if (curr.key) acc[curr.key] = curr.value;
       return acc;
     }, {} as any);
 
-    let requestData = method !== 'GET' ? body : undefined;
-    if (method !== 'GET' && bodyType === 'form-urlencoded') {
+    let requestData = tab.method !== 'GET' ? tab.body : undefined;
+    if (tab.method !== 'GET' && tab.bodyType === 'form-urlencoded') {
       const params = new URLSearchParams();
-      formParams.forEach(p => {
+      tab.formParams.forEach(p => {
         if (p.key) params.append(p.key, p.value);
       });
       requestData = params.toString();
       headerObj['Content-Type'] = 'application/x-www-form-urlencoded';
     }
 
+    const isMultipart = tab.method !== 'GET' && tab.bodyType === 'multipart';
+    const multipartData = isMultipart ? tab.multipartParams.filter(p => p.key) : undefined;
+
     try {
-      const res = await fetch('http://localhost:3001/api/execute', {
+      const res = await fetch('/api/execute', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          method,
-          url,
+          method: tab.method,
+          url: tab.url,
           headers: headerObj,
-          data: requestData,
-          auth: auth.type === 'none' ? null : auth,
-          ignoreSSL
+          data: isMultipart ? undefined : requestData,
+          multipartData,
+          auth: tab.auth.type === 'none' ? null : tab.auth,
+          ignoreSSL: tab.ignoreSSL
         })
       });
       const data = await res.json();
       
       if (res.status === 500 && data.error) {
-        showToast(data.error, 'error');
+        if (data.sslError) {
+          showToast('SSL certificate error - marca "Ignore SSL" y reintenta', 'error');
+          updateActiveTab({ ignoreSSL: true });
+        } else {
+          showToast(data.error, 'error');
+        }
       }
 
-      setResponse(data);
-      fetchHistory();
-      
-      // Auto-switch response tab based on content type
+      const newResponse = { ...data, timestamp: new Date().toLocaleString() };
       const contentType = data.headers?.['content-type'] || '';
-      if (contentType.includes('html')) setActiveResTab('HTML');
-      else if (contentType.includes('xml')) setActiveResTab('XML');
-      else setActiveResTab('JSON');
+      let newResTab: ResponseTab = 'JSON';
+      if (contentType.includes('html')) newResTab = 'HTML';
+      else if (contentType.includes('xml')) newResTab = 'XML';
+
+      updateActiveTab({ response: newResponse, activeResTab: newResTab });
+      fetchHistory();
 
     } catch (e: any) {
-      setResponse({ error: e.message });
+      updateActiveTab({ response: { error: e.message } });
       showToast(e.message, 'error');
+    } finally {
+      setIsSending(false);
     }
   };
 
-  const addHeader = () => setHeaders([...headers, { key: '', value: '' }]);
+  const addHeader = () => {
+    updateActiveTab({ headers: [...activeTab.headers, { key: '', value: '' }] });
+  };
+
   const updateHeader = (index: number, field: 'key' | 'value', val: string) => {
-    const newHeaders = [...headers];
-    newHeaders[index][field] = val;
-    setHeaders(newHeaders);
+    const newHeaders = [...activeTab.headers];
+    newHeaders[index] = { ...newHeaders[index], [field]: val };
+    updateActiveTab({ headers: newHeaders });
+  };
+
+  const addMultipartParam = () => {
+    updateActiveTab({ multipartParams: [...activeTab.multipartParams, { type: 'text', key: '', value: '' }] });
+  };
+
+  const updateMultipartParam = (index: number, updates: Partial<MultipartParam>) => {
+    const newParams = [...activeTab.multipartParams];
+    newParams[index] = { ...newParams[index], ...updates };
+    updateActiveTab({ multipartParams: newParams });
+  };
+
+  const removeMultipartParam = (index: number) => {
+    updateActiveTab({ multipartParams: activeTab.multipartParams.filter((_, idx) => idx !== index) });
+  };
+
+  const handleMultipartFileSelect = (index: number, e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      const base64 = (reader.result as string).split(',')[1];
+      updateMultipartParam(index, {
+        type: 'file',
+        fileData: base64,
+        fileName: file.name,
+        mimeType: file.type || 'application/octet-stream',
+        value: file.name,
+      });
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const JsonTreeView = ({ data, expanded = true }: { data: any; expanded?: boolean }) => {
+    // eslint-disable-next-line react-hooks/rules-of-hooks
+    const [isExpanded, setIsExpanded] = useState(expanded);
+
+    if (data === null) return <span className="json-null">null</span>;
+    if (typeof data === 'boolean') return <span className="json-bool">{data ? 'true' : 'false'}</span>;
+    if (typeof data === 'number') return <span className="json-number">{String(data)}</span>;
+    if (typeof data === 'string') {
+      const maxLen = 500;
+      const display = data.length > maxLen ? data.slice(0, maxLen) + '.' : data;
+      return <span className="json-string">"{display}"</span>;
+    }
+
+    if (Array.isArray(data)) {
+      if (data.length === 0) return <span className="json-bracket">[ ]</span>;
+      return (
+        <span className="json-node">
+          <span className="json-toggle" onClick={() => setIsExpanded(!isExpanded)}>
+            {isExpanded ? '\u25BC' : '\u25B6'}
+          </span>
+          <span className="json-bracket">[</span>
+          {!isExpanded && (
+            <span className="json-preview"> {data.length} item{data.length !== 1 ? 's' : ''} </span>
+          )}
+          {!isExpanded && <span className="json-bracket">]</span>}
+          {isExpanded && (
+            <>
+              <div className="json-children">
+                {data.map((item, i) => (
+                  <div key={i} className="json-line">
+                    <JsonTreeView data={item} expanded={false} />
+                    {i < data.length - 1 && <span className="json-comma">,</span>}
+                  </div>
+                ))}
+              </div>
+              <span className="json-bracket">]</span>
+            </>
+          )}
+        </span>
+      );
+    }
+
+    if (typeof data === 'object') {
+      const keys = Object.keys(data);
+      if (keys.length === 0) return <span className="json-bracket">{'{ }'}</span>;
+      return (
+        <span className="json-node">
+          <span className="json-toggle" onClick={() => setIsExpanded(!isExpanded)}>
+            {isExpanded ? '\u25BC' : '\u25B6'}
+          </span>
+          <span className="json-bracket">{'{'}</span>
+          {!isExpanded && (
+            <span className="json-preview"> {keys.length} key{keys.length !== 1 ? 's' : ''} </span>
+          )}
+          {!isExpanded && <span className="json-bracket">{'}'}</span>}
+          {isExpanded && (
+            <>
+              <div className="json-children">
+                {keys.map((key, i) => (
+                  <div key={key} className="json-line">
+                    <span className="json-key">"{key}"</span>
+                    <span className="json-colon">: </span>
+                    <JsonTreeView data={data[key]} expanded={false} />
+                    {i < keys.length - 1 && <span className="json-comma">,</span>}
+                  </div>
+                ))}
+              </div>
+              <span className="json-bracket">{'}'}</span>
+            </>
+          )}
+        </span>
+      );
+    }
+    return <span>{String(data)}</span>;
   };
 
   const formatContent = (content: any, type: ResponseTab) => {
@@ -727,15 +1076,15 @@ function App() {
       
       <aside className="sidebar">
         <button className="sidebar-toggle" onClick={() => setSidebarOpen(!sidebarOpen)}>
-          {sidebarOpen ? '✕' : '☰'}
+          {sidebarOpen ? '\u2715' : '\u2630'}
         </button>
         <div className="sidebar-header">
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <h2>API Client</h2>
             {sidebarOpen && (
               <div className="sidebar-actions">
-                <button className="icon-btn" title="Import Postman Collection" onClick={handleImportClick}>📥</button>
-                <button className="icon-btn" title="Export Postman Collection" onClick={handleExport}>📤</button>
+                <button className="icon-btn" title="Import Postman Collection" onClick={handleImportClick}>Import</button>
+                <button className="icon-btn" title="Export Postman Collection" onClick={handleExport}>Export</button>
                 <input 
                   type="file" 
                   ref={fileInputRef} 
@@ -766,7 +1115,7 @@ function App() {
                     <span className={`method-tag ${item.method}`}>{item.method}</span>
                     <span className="history-url">{item.url}</span>
                   </div>
-                  <button className="delete-item-btn" onClick={(e) => { e.stopPropagation(); handleDeleteHistory(item.id); }}>×</button>
+                  <button className="delete-item-btn" onClick={(e) => { e.stopPropagation(); handleDeleteHistory(item.id); }}>{'\u00D7'}</button>
                 </div>
               ))}
             </>
@@ -782,40 +1131,23 @@ function App() {
 
                 const renderFolder = (folder: any, depth: number): JSX.Element => (
                   <div key={folder.id} className="folder-group" style={{ marginLeft: `${depth * 12}px` }}>
-                    <div
-                      className="folder-header"
-                      draggable
-                      onDragStart={(e) => {
-                        e.dataTransfer.setData('folderId', folder.id.toString());
-                        e.dataTransfer.effectAllowed = 'move';
-                      }}
-                    >
+                    <div className="folder-header" draggable onDragStart={(e) => { e.dataTransfer.setData('folderId', folder.id.toString()); e.dataTransfer.effectAllowed = 'move'; }}>
                       <div className="folder-header-main" onClick={() => toggleFolder(folder.id)}>
-                        <span>{expandedFolders[folder.id] ? '▼' : '▶'}</span>
-                        <span className="folder-icon">📁</span>
+                        <span>{expandedFolders[folder.id] ? '\u25BC' : '\u25B6'}</span>
+                        <span className="folder-icon">{'\u25A0'}</span>
                         <strong>{folder.name}</strong>
                       </div>
                       <div style={{display: 'flex', gap: '0.2rem'}}>
                         <button className="icon-btn-xs" onClick={(e) => { e.stopPropagation(); handleCreateFolder(projectName, prompt('Folder name:') || '', folder.id); }} title="New Subfolder">+</button>
-                        <button className="icon-btn-xs" onClick={(e) => { e.stopPropagation(); handleRenameFolder(folder.id, folder.name); }} title="Rename">✎</button>
-                        <button className="icon-btn-xs" onClick={(e) => { e.stopPropagation(); handleDeleteFolder(folder.id); }} title="Delete">×</button>
+                        <button className="icon-btn-xs" onClick={(e) => { e.stopPropagation(); handleRenameFolder(folder.id, folder.name); }} title="Rename">{'\u270E'}</button>
+                        <button className="icon-btn-xs" onClick={(e) => { e.stopPropagation(); handleDeleteFolder(folder.id); }} title="Delete">{'\u00D7'}</button>
                       </div>
                     </div>
                     {expandedFolders[folder.id] && (
                       <div className="folder-items">
                         {folder.children.map((child: any) => renderFolder(child, depth + 1))}
                         {getFolderRequests(requests, folder.id).map((item: any) => (
-                          <div
-                            key={item.id}
-                            className={`history-item draggable ${dragOverItemId === item.id ? 'drag-over' : ''}`}
-                            style={{ marginLeft: `${(depth + 1) * 12}px` }}
-                            onClick={() => handleLoadRequest(item, true)}
-                            draggable
-                            onDragStart={(e) => handleDragStart(e, item.id)}
-                            onDragOver={(e) => { e.preventDefault(); setDragOverItemId(item.id); }}
-                            onDragLeave={() => setDragOverItemId(null)}
-                            onDrop={(e) => handleItemDrop(e, item.id, item.project || 'Default')}
-                          >
+                          <div key={item.id} className={`history-item draggable ${dragOverItemId === item.id ? 'drag-over' : ''}`} style={{ marginLeft: `${(depth + 1) * 12}px` }} onClick={() => handleLoadRequest(item, true)} draggable onDragStart={(e) => handleDragStart(e, item.id)} onDragOver={(e) => { e.preventDefault(); setDragOverItemId(item.id); }} onDragLeave={() => setDragOverItemId(null)} onDrop={(e) => handleItemDrop(e, item.id, item.project || 'Default')}>
                             <div className="history-item-content">
                               <div className="saved-name">{item.name}</div>
                               <div style={{display: 'flex', alignItems: 'center', gap: '0.5rem'}}>
@@ -824,8 +1156,8 @@ function App() {
                               </div>
                             </div>
                             <div className="item-actions">
-                              <button className="icon-btn-sm action-btn" onClick={(e) => { e.stopPropagation(); handleExportItem(item.id); }} title="Export Request">📤</button>
-                              <button className="delete-item-btn action-btn" onClick={(e) => { e.stopPropagation(); handleDeleteSaved(item.id); }}>×</button>
+                              <button className="icon-btn-sm action-btn" onClick={(e) => { e.stopPropagation(); handleExportItem(item.id); }} title="Export Request">{'\u2191'}</button>
+                              <button className="delete-item-btn action-btn" onClick={(e) => { e.stopPropagation(); handleDeleteSaved(item.id); }}>{'\u00D7'}</button>
                             </div>
                           </div>
                         ))}
@@ -835,61 +1167,25 @@ function App() {
                 );
 
                 return (
-                  <div 
-                    key={projectName} 
-                    className="project-group"
-                    onDragOver={(e) => { 
-                      e.preventDefault();
-                    }}
-                    onDragEnter={(e) => {
-                      e.preventDefault();
-                      if (e.dataTransfer.types.includes('projectName')) {
-                        (e.currentTarget as HTMLDivElement).classList.add('drag-over');
-                      }
-                    }}
-                    onDragLeave={(e) => {
-                      (e.currentTarget as HTMLDivElement).classList.remove('drag-over');
-                    }}
-                    onDrop={(e) => {
-                      if (e.dataTransfer.getData('projectName')) {
-                        handleProjectDrop(e, projectName);
-                      } else {
-                        handleDrop(e, projectName);
-                      }
-                      (e.currentTarget as HTMLDivElement).classList.remove('drag-over');
-                    }}
-                  >
-                    <div 
-                      className="project-header"
-                      draggable
-                      onDragStart={(e) => handleProjectDragStart(e, projectName)}
-                    >
+                  <div key={projectName} className="project-group" onDragOver={(e) => { e.preventDefault(); }} onDragEnter={(e) => { e.preventDefault(); if (e.dataTransfer.types.includes('projectName')) { (e.currentTarget as HTMLDivElement).classList.add('drag-over'); } }} onDragLeave={(e) => { (e.currentTarget as HTMLDivElement).classList.remove('drag-over'); }} onDrop={(e) => { if (e.dataTransfer.getData('projectName')) { handleProjectDrop(e, projectName); } else { handleDrop(e, projectName); } (e.currentTarget as HTMLDivElement).classList.remove('drag-over'); }}>
+                    <div className="project-header" draggable onDragStart={(e) => handleProjectDragStart(e, projectName)}>
                       <div className="project-header-main" onClick={() => toggleProject(projectName)}>
-                        <span>{expandedProjects[projectName] ? '▼' : '▶'}</span>
+                        <span>{expandedProjects[projectName] ? '\u25BC' : '\u25B6'}</span>
                         <strong>{projectName}</strong>
                         <span className="project-count">({requests.length})</span>
                       </div>
                       <div style={{display: 'flex', gap: '0.3rem'}}>
-                        <button className="icon-btn-sm" onClick={(e) => { e.stopPropagation(); handleCreateFolder(projectName, prompt('Folder name:') || ''); }} title="New Folder">📁+</button>
-                        <button className="icon-btn-sm" onClick={(e) => { e.stopPropagation(); handleExportProject(projectName); }} title="Export Project">📤</button>
-                        <button className="rename-btn" onClick={(e) => { e.stopPropagation(); handleRenameProject(projectName); }} title="Rename Project">✎</button>
-                        <button className="delete-project-btn" onClick={(e) => { e.stopPropagation(); handleDeleteProject(projectName); }} title="Delete Project">🗑</button>
+                        <button className="icon-btn-sm" onClick={(e) => { e.stopPropagation(); handleCreateFolder(projectName, prompt('Folder name:') || ''); }} title="New Folder">{'\u25A0'}+</button>
+                        <button className="icon-btn-sm" onClick={(e) => { e.stopPropagation(); handleExportProject(projectName); }} title="Export Project">{'\u2191'}</button>
+                        <button className="rename-btn" onClick={(e) => { e.stopPropagation(); handleRenameProject(projectName); }} title="Rename Project">{'\u270E'}</button>
+                        <button className="delete-project-btn" onClick={(e) => { e.stopPropagation(); handleDeleteProject(projectName); }} title="Delete Project">{'\u00D7'}</button>
                       </div>
                     </div>
                     {expandedProjects[projectName] && (
                       <div className="project-items">
                         {folderTree.map((folder: any) => renderFolder(folder, 0))}
                         {rootRequests.map((item: any) => (
-                          <div 
-                            key={item.id} 
-                            className={`history-item draggable ${dragOverItemId === item.id ? 'drag-over' : ''}`}
-                            onClick={() => handleLoadRequest(item, true)}
-                            draggable
-                            onDragStart={(e) => handleDragStart(e, item.id)}
-                            onDragOver={(e) => { e.preventDefault(); setDragOverItemId(item.id); }}
-                            onDragLeave={() => setDragOverItemId(null)}
-                            onDrop={(e) => handleItemDrop(e, item.id, item.project || 'Default')}
-                          >
+                          <div key={item.id} className={`history-item draggable ${dragOverItemId === item.id ? 'drag-over' : ''}`} onClick={() => handleLoadRequest(item, true)} draggable onDragStart={(e) => handleDragStart(e, item.id)} onDragOver={(e) => { e.preventDefault(); setDragOverItemId(item.id); }} onDragLeave={() => setDragOverItemId(null)} onDrop={(e) => handleItemDrop(e, item.id, item.project || 'Default')}>
                             <div className="history-item-content">
                               <div className="saved-name">{item.name}</div>
                               <div style={{display: 'flex', alignItems: 'center', gap: '0.5rem'}}>
@@ -898,8 +1194,8 @@ function App() {
                               </div>
                             </div>
                             <div className="item-actions">
-                              <button className="icon-btn-sm action-btn" onClick={(e) => { e.stopPropagation(); handleExportItem(item.id); }} title="Export Request">📤</button>
-                              <button className="delete-item-btn action-btn" onClick={(e) => { e.stopPropagation(); handleDeleteSaved(item.id); }}>×</button>
+                              <button className="icon-btn-sm action-btn" onClick={(e) => { e.stopPropagation(); handleExportItem(item.id); }} title="Export Request">{'\u2191'}</button>
+                              <button className="delete-item-btn action-btn" onClick={(e) => { e.stopPropagation(); handleDeleteSaved(item.id); }}>{'\u00D7'}</button>
                             </div>
                           </div>
                         ))}
@@ -915,63 +1211,64 @@ function App() {
       </aside>
 
       <main className="main-content">
+        <div className="tabs-bar">
+          <div className="tabs-container" ref={tabsContainerRef}>
+            {tabs.map((tab, index) => (
+              <div key={tab.id} className={`tab-item ${index === activeTabIndex ? 'active' : ''}`} onClick={() => setActiveTabIndex(index)}>
+                <span className={`method-tag ${tab.method}`}>{tab.method}</span>
+                <span className="tab-name">{tab.name}</span>
+                {tab.hasUnsavedChanges && <span className="tab-unsaved">{'\u2022'}</span>}
+                <button className="tab-close" onClick={(e) => { e.stopPropagation(); closeTab(index); }}>{'\u00d7'}</button>
+              </div>
+            ))}
+          </div>
+          <button className="tab-add-btn" onClick={() => addTab()}>+</button>
+        </div>
+
         <header className="request-header">
-          <select className="method-select" value={method} onChange={(e) => setMethod(e.target.value as Method)}>
+          <select className="method-select" value={activeTab.method} onChange={(e) => updateActiveTab({ method: e.target.value as Method })}>
             <option>GET</option><option>POST</option><option>PUT</option><option>DELETE</option><option>PATCH</option>
           </select>
-          <input type="text" className="url-input" placeholder="https://api.example.com" value={url} onChange={(e) => setUrl(e.target.value)} />
+          <input type="text" className="url-input" placeholder="https://api.example.com" value={activeTab.url} onChange={(e) => updateActiveTab({ url: e.target.value })} />
           <div className="ssl-toggle">
-            <input 
-              type="checkbox" 
-              id="ignoreSSL" 
-              checked={ignoreSSL} 
-              onChange={(e) => setIgnoreSSL(e.target.checked)} 
-            />
+            <input type="checkbox" id="ignoreSSL" checked={activeTab.ignoreSSL} onChange={(e) => updateActiveTab({ ignoreSSL: e.target.checked })} />
             <label htmlFor="ignoreSSL">Ignore SSL</label>
           </div>
           <div style={{display: 'flex', gap: '0.5rem'}}>
-            <button className="send-button" onClick={handleSend}>Send</button>
+            <button className="send-button" onClick={handleSend} disabled={isSending}>
+              {isSending ? <span className="spinner" /> : 'Send'}
+            </button>
             <button className="send-button" style={{background: '#444'}} onClick={handleSaveRequest}>Save</button>
+            <button className="send-button" style={{background: '#333', fontSize: '0.75rem'}} onClick={handleCopyAsCurl} title="Copy as cURL">Curl</button>
           </div>
         </header>
 
         <div className="workspace-grid">
           <section className="request-config">
             <div className="tabs">
-              {(['Headers', 'Auth', 'Body'] as const).map(tab => (
-                <div key={tab} className={`tab ${activeTab === tab ? 'active' : ''}`} onClick={() => setActiveTab(tab)}>{tab}</div>
+              {(['Headers', 'Auth', 'Body'] as const).map(ctab => (
+                <div key={ctab} className={`tab ${activeTab.activeConfigTab === ctab ? 'active' : ''}`} onClick={() => updateActiveTab({ activeConfigTab: ctab })}>{ctab}</div>
               ))}
             </div>
             <div className="tab-content">
-              {activeTab === 'Headers' && (
+              {activeTab.activeConfigTab === 'Headers' && (
                 <div className="kv-editor">
-                  {headers.map((h, i) => (
+                  {activeTab.headers.map((h, i) => (
                     <div key={i} className="kv-row">
-                      <input
-                        placeholder="Key"
-                        list={`header-keys-${i}`}
-                        value={h.key}
-                        onChange={(e) => {
-                          const val = e.target.value;
-                          updateHeader(i, 'key', val);
-                          // Auto-fill a default value if the key is known and value is empty
-                          if (val && commonHeaders[val] && !headers[i].value) {
-                            const suggested = commonHeaders[val].find(v => v !== '');
-                            if (suggested) updateHeader(i, 'value', suggested);
-                          }
-                        }}
-                      />
+                      <input placeholder="Key" list={`header-keys-${i}`} value={h.key} onChange={(e) => {
+                        const val = e.target.value;
+                        updateHeader(i, 'key', val);
+                        if (val && commonHeaders[val] && !activeTab.headers[i].value) {
+                          const suggested = commonHeaders[val].find(v => v !== '');
+                          if (suggested) updateHeader(i, 'value', suggested);
+                        }
+                      }} />
                       <datalist id={`header-keys-${i}`}>
                         {allHeaderNames.map(name => (
                           <option key={name} value={name} />
                         ))}
                       </datalist>
-                      <input
-                        placeholder="Value"
-                        list={`header-vals-${i}`}
-                        value={h.value}
-                        onChange={(e) => updateHeader(i, 'value', e.target.value)}
-                      />
+                      <input placeholder="Value" list={`header-vals-${i}`} value={h.value} onChange={(e) => updateHeader(i, 'value', e.target.value)} />
                       <datalist id={`header-vals-${i}`}>
                         {commonHeaders[h.key]?.map(v => (
                           <option key={v} value={v} />
@@ -982,70 +1279,101 @@ function App() {
                   <button className="send-button" style={{maxWidth: '150px', background: '#333'}} onClick={addHeader}>+ Add Header</button>
                 </div>
               )}
-              {activeTab === 'Auth' && (
+              {activeTab.activeConfigTab === 'Auth' && (
                 <div className="auth-editor">
-                  <select value={auth.type} onChange={(e) => setAuth({ ...auth, type: e.target.value })}>
+                  <select value={activeTab.auth.type} onChange={(e) => updateActiveTab({ auth: { ...activeTab.auth, type: e.target.value } })}>
                     <option value="none">No Auth</option>
                     <option value="bearer">Bearer Token</option>
                     <option value="apikey">API Key</option>
                     <option value="basic">Basic Auth</option>
                   </select>
-                  {auth.type === 'bearer' && <input placeholder="Token" value={auth.token} onChange={(e) => setAuth({ ...auth, token: e.target.value })} />}
-                  {auth.type === 'basic' && (
+                  {activeTab.auth.type === 'bearer' && <input placeholder="Token" value={activeTab.auth.token} onChange={(e) => updateActiveTab({ auth: { ...activeTab.auth, token: e.target.value } })} />}
+                  {activeTab.auth.type === 'basic' && (
                     <div style={{display: 'flex', gap: '0.5rem', flexWrap: 'wrap'}}>
-                      <input placeholder="Username" value={auth.username} onChange={(e) => setAuth({ ...auth, username: e.target.value })} />
-                      <input type="password" placeholder="Password" value={auth.password} onChange={(e) => setAuth({ ...auth, password: e.target.value })} />
+                      <input placeholder="Username" value={activeTab.auth.username} onChange={(e) => updateActiveTab({ auth: { ...activeTab.auth, username: e.target.value } })} />
+                      <input type="password" placeholder="Password" value={activeTab.auth.password} onChange={(e) => updateActiveTab({ auth: { ...activeTab.auth, password: e.target.value } })} />
                     </div>
                   )}
-                  {auth.type === 'apikey' && (
+                  {activeTab.auth.type === 'apikey' && (
                     <div style={{display: 'flex', gap: '0.5rem', flexWrap: 'wrap'}}>
-                      <input placeholder="Key" value={auth.key} onChange={(e) => setAuth({ ...auth, key: e.target.value })} />
-                      <input placeholder="Value" value={auth.value} onChange={(e) => setAuth({ ...auth, value: e.target.value })} />
-                      <select value={auth.addTo} onChange={(e) => setAuth({ ...auth, addTo: e.target.value })}>
+                      <input placeholder="Key" value={activeTab.auth.key} onChange={(e) => updateActiveTab({ auth: { ...activeTab.auth, key: e.target.value } })} />
+                      <input placeholder="Value" value={activeTab.auth.value} onChange={(e) => updateActiveTab({ auth: { ...activeTab.auth, value: e.target.value } })} />
+                      <select value={activeTab.auth.addTo} onChange={(e) => updateActiveTab({ auth: { ...activeTab.auth, addTo: e.target.value } })}>
                         <option value="header">Header</option><option value="query">Query Params</option>
                       </select>
                     </div>
                   )}
                 </div>
               )}
-              {activeTab === 'Body' && (
+              {activeTab.activeConfigTab === 'Body' && (
                 <div className="body-editor">
                   <div className="body-type-selector">
                     <label>
-                      <input type="radio" name="bodyType" checked={bodyType === 'raw'} onChange={() => setBodyType('raw')} /> Raw (JSON/Text)
+                      <input type="radio" name="bodyType" checked={activeTab.bodyType === 'raw'} onChange={() => updateActiveTab({ bodyType: 'raw' })} /> Raw (JSON/Text)
                     </label>
                     <label>
-                      <input type="radio" name="bodyType" checked={bodyType === 'form-urlencoded'} onChange={() => setBodyType('form-urlencoded')} /> x-www-form-urlencoded
+                      <input type="radio" name="bodyType" checked={activeTab.bodyType === 'form-urlencoded'} onChange={() => updateActiveTab({ bodyType: 'form-urlencoded' })} /> x-www-form-urlencoded
+                    </label>
+                    <label>
+                      <input type="radio" name="bodyType" checked={activeTab.bodyType === 'multipart'} onChange={() => updateActiveTab({ bodyType: 'multipart' })} /> multipart/form-data
                     </label>
                   </div>
 
-                  {bodyType === 'raw' ? (
-                    <textarea 
-                      className="body-textarea" 
-                      placeholder='{"key": "value"}'
-                      value={body}
-                      onChange={(e) => setBody(e.target.value)}
-                    />
-                  ) : (
+                  {activeTab.bodyType === 'raw' ? (
+                    <textarea className="body-textarea" placeholder='{"key": "value"}' value={activeTab.body} onChange={(e) => updateActiveTab({ body: e.target.value })} />
+                  ) : activeTab.bodyType === 'form-urlencoded' ? (
                     <div className="kv-editor">
-                      {formParams.map((p, i) => (
+                      {activeTab.formParams.map((p, i) => (
                         <div key={i} className="kv-row">
                           <input placeholder="Key" value={p.key} onChange={(e) => {
-                            const newParams = [...formParams];
-                            newParams[i].key = e.target.value;
-                            setFormParams(newParams);
+                            const newParams = [...activeTab.formParams];
+                            newParams[i] = { ...newParams[i], key: e.target.value };
+                            updateActiveTab({ formParams: newParams });
                           }} />
                           <input placeholder="Value" value={p.value} onChange={(e) => {
-                            const newParams = [...formParams];
-                            newParams[i].value = e.target.value;
-                            setFormParams(newParams);
+                            const newParams = [...activeTab.formParams];
+                            newParams[i] = { ...newParams[i], value: e.target.value };
+                            updateActiveTab({ formParams: newParams });
                           }} />
                           <button className="clear-btn" onClick={() => {
-                            setFormParams(formParams.filter((_, idx) => idx !== i));
-                          }}>×</button>
+                            updateActiveTab({ formParams: activeTab.formParams.filter((_, idx) => idx !== i) });
+                          }}>{'\u00D7'}</button>
                         </div>
                       ))}
-                      <button className="send-button" style={{maxWidth: '150px', background: '#333'}} onClick={() => setFormParams([...formParams, { key: '', value: '' }])}>+ Add Parameter</button>
+                      <button className="send-button" style={{maxWidth: '150px', background: '#333'}} onClick={() => updateActiveTab({ formParams: [...activeTab.formParams, { key: '', value: '' }] })}>+ Add Parameter</button>
+                    </div>
+                  ) : (
+                    <div className="kv-editor">
+                      {activeTab.multipartParams.map((p, i) => (
+                        <div key={i} className="kv-row multipart-row">
+                          <select value={p.type} onChange={(e) => {
+                            const newType = e.target.value as 'text' | 'file';
+                            updateMultipartParam(i, { type: newType, value: '', fileData: undefined, fileName: undefined, mimeType: undefined });
+                          }} className="multipart-type-select">
+                            <option value="text">Text</option>
+                            <option value="file">File</option>
+                          </select>
+                          <input placeholder="Key" value={p.key} onChange={(e) => updateMultipartParam(i, { key: e.target.value })} />
+                          {p.type === 'text' ? (
+                            <input placeholder="Value" value={p.value} onChange={(e) => updateMultipartParam(i, { value: e.target.value })} />
+                          ) : (
+                            <div className="file-input-wrapper">
+                              <input
+                                type="file"
+                                style={{ display: 'none' }}
+                                id={`multipart-file-${activeTab.id}-${i}`}
+                                onChange={(e) => handleMultipartFileSelect(i, e)}
+                              />
+                              <label htmlFor={`multipart-file-${activeTab.id}-${i}`} className="file-input-label">
+                                {p.fileName || 'Choose file...'}
+                              </label>
+                              {p.fileData && <span className="file-badge">Ready</span>}
+                            </div>
+                          )}
+                          <button className="clear-btn" onClick={() => removeMultipartParam(i)}>{'\u00D7'}</button>
+                        </div>
+                      ))}
+                      <button className="send-button" style={{maxWidth: '150px', background: '#333'}} onClick={addMultipartParam}>+ Add Parameter</button>
                     </div>
                   )}
                 </div>
@@ -1057,32 +1385,39 @@ function App() {
           <section className="response-section">
             <div className="response-header">
               <strong>Response</strong>
-              {response && (
+              {activeTab.response && (
                 <div className="response-meta">
-                  <span className="status-code">Status: {response.status}</span>
-                  <span style={{ color: '#aaa', marginLeft: '1rem' }}>Time: {response.time}</span>
+                  <span style={{ color: '#aaa', marginRight: '1rem' }}>{activeTab.response.timestamp || ''}</span>
+                  <span className="status-code">Status: {activeTab.response.status}</span>
+                  <span style={{ color: '#aaa', marginLeft: '1rem' }}>Time: {activeTab.response.time}</span>
                 </div>
               )}
             </div>
             <div className="response-body-container">
               <div className="response-tabs">
-                {(['JSON', 'Text', 'HTML', 'XML', 'Headers'] as const).map(tab => (
+                {(['JSON', 'Text', 'HTML', 'XML', 'Headers'] as const).map(rtab => (
                   <div 
-                    key={tab} 
-                    className={`response-tab ${activeResTab === tab ? 'active' : ''}`}
-                    onClick={() => setActiveResTab(tab)}
+                    key={rtab} 
+                    className={`response-tab ${activeTab.activeResTab === rtab ? 'active' : ''}`}
+                    onClick={() => updateActiveTab({ activeResTab: rtab })}
                   >
-                    {tab}
+                    {rtab}
                   </div>
                 ))}
               </div>
               <div className="response-content">
-                {response ? (
-                  <pre>
-                    {activeResTab === 'Headers' 
-                      ? JSON.stringify(response.headers, null, 2) 
-                      : formatContent(response.data || response.error, activeResTab)}
-                  </pre>
+                {activeTab.response ? (
+                  activeTab.activeResTab === 'JSON' && activeTab.response.data && typeof activeTab.response.data === 'object' ? (
+                    <div className="json-tree-container">
+                      <JsonTreeView data={activeTab.response.data} expanded={true} />
+                    </div>
+                  ) : (
+                    <pre>
+                      {activeTab.activeResTab === 'Headers' 
+                        ? JSON.stringify(activeTab.response.headers, null, 2) 
+                        : formatContent(activeTab.response.data || activeTab.response.error, activeTab.activeResTab)}
+                    </pre>
+                  )
                 ) : (
                   <p style={{color: '#666'}}>Ready to send request</p>
                 )}

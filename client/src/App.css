@@ -378,6 +378,28 @@ body {
   transition: opacity 0.2s;
 }
 
+.send-button:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  justify-content: center;
+}
+
+.spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: white;
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
 /* Workspace Grid (Side by side on PC) */
 .workspace-grid {
   display: grid;
@@ -412,6 +434,15 @@ body {
   display: flex;
   flex-direction: column;
   background: var(--bg-header);
+  overflow: hidden;
+  min-height: 0;
+}
+
+.response-body-container {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
   overflow: hidden;
 }
 
@@ -697,4 +728,242 @@ body {
 .icon-btn-xs:hover {
   background: rgba(255, 255, 255, 0.1);
   color: var(--text-main);
+}
+
+/* JSON Tree Viewer */
+.json-tree-container {
+  font-family: 'Courier New', Courier, monospace;
+  font-size: 0.82rem;
+  line-height: 1.6;
+  padding: 0.5rem 0;
+  white-space: nowrap;
+}
+
+.json-toggle {
+  cursor: pointer;
+  user-select: none;
+  font-size: 0.65rem;
+  color: #888;
+  margin-right: 3px;
+  display: inline-block;
+  width: 12px;
+  text-align: center;
+}
+
+.json-toggle:hover {
+  color: #ccc;
+}
+
+.json-bracket {
+  color: #e0e0e0;
+}
+
+.json-key {
+  color: #9cdcfe;
+}
+
+.json-colon {
+  color: #e0e0e0;
+}
+
+.json-string {
+  color: #ce9178;
+}
+
+.json-number {
+  color: #b5cea8;
+}
+
+.json-bool {
+  color: #569cd6;
+}
+
+.json-null {
+  color: #569cd6;
+}
+
+.json-comma {
+  color: #e0e0e0;
+}
+
+.json-preview {
+  color: #888;
+  font-style: italic;
+  font-size: 0.78rem;
+}
+
+.json-children {
+  padding-left: 1.2rem;
+  border-left: 1px solid rgba(255, 255, 255, 0.06);
+  margin-left: 0.3rem;
+}
+
+.json-line {
+  white-space: nowrap;
+}
+
+.json-node {
+  display: inline;
+}
+
+/* ===== API Tabs Bar (Chrome-style) ===== */
+.tabs-bar {
+  display: flex;
+  align-items: center;
+  background: var(--bg-sidebar);
+  border-bottom: 1px solid var(--border-color);
+  padding: 0.4rem 0.4rem 0;
+  gap: 0.25rem;
+  flex-shrink: 0;
+}
+
+.tabs-container {
+  display: flex;
+  flex: 1;
+  overflow-x: auto;
+  scrollbar-width: none;
+  gap: 2px;
+  scroll-behavior: smooth;
+  min-width: 0;
+}
+
+.tabs-container::-webkit-scrollbar {
+  display: none;
+}
+
+.tab-item {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.5rem 0.8rem;
+  background: var(--bg-dark);
+  border: 1px solid var(--border-color);
+  border-bottom: none;
+  border-radius: 8px 8px 0 0;
+  cursor: pointer;
+  white-space: nowrap;
+  min-width: 0;
+  max-width: 200px;
+  transition: background 0.15s ease;
+  user-select: none;
+}
+
+.tab-item:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.tab-item.active {
+  background: var(--bg-header);
+  border-bottom: 2px solid var(--accent-blue);
+}
+
+.tab-item .method-tag {
+  font-size: 0.6rem;
+  padding: 1px 4px;
+  min-width: 0;
+}
+
+.tab-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 0.8rem;
+  max-width: 120px;
+}
+
+.tab-unsaved {
+  color: var(--accent-blue);
+  font-size: 1.2rem;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.tab-close {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  padding: 0 3px;
+  font-size: 1rem;
+  opacity: 0;
+  transition: opacity 0.15s, color 0.15s;
+  border-radius: 3px;
+  flex-shrink: 0;
+  line-height: 1;
+}
+
+.tab-item:hover .tab-close {
+  opacity: 1;
+}
+
+.tab-close:hover {
+  background: rgba(255, 255, 255, 0.15);
+  color: #f93e3e;
+}
+
+.tab-add-btn {
+  background: none;
+  border: 1px solid var(--border-color);
+  color: var(--text-dim);
+  cursor: pointer;
+  padding: 0.35rem 0.7rem;
+  border-radius: 4px;
+  font-size: 1rem;
+  transition: all 0.15s;
+  flex-shrink: 0;
+}
+
+.tab-add-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text-main);
+}
+
+/* Multipart form-data editor */
+.multipart-row {
+  flex-wrap: wrap;
+}
+
+.multipart-type-select {
+  width: 80px;
+  flex-shrink: 0;
+}
+
+.file-input-wrapper {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.file-input-label {
+  display: inline-block;
+  padding: 0.4rem 0.7rem;
+  background: var(--bg-header);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--text-dim);
+  font-size: 0.85rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+  transition: all 0.15s;
+}
+
+.file-input-label:hover {
+  border-color: var(--accent-blue);
+  color: var(--text-main);
+}
+
+.file-badge {
+  display: inline-block;
+  padding: 0.15rem 0.5rem;
+  background: #2d6a2d;
+  color: #8f8;
+  border-radius: 3px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  flex-shrink: 0;
 }

@@ -4,6 +4,7 @@ const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
 const axios = require('axios');
 const https = require('https');
+const FormData = require('form-data');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -58,6 +59,7 @@ const db = new sqlite3.Database(dbPath, (err) => {
         db.run(`ALTER TABLE saved_requests ADD COLUMN response_data TEXT`, () => {});
         db.run(`ALTER TABLE saved_requests ADD COLUMN response_headers TEXT`, () => {});
         db.run(`ALTER TABLE saved_requests ADD COLUMN sort_order INTEGER DEFAULT 0`, () => {});
+        db.run(`ALTER TABLE saved_requests ADD COLUMN multipart_params TEXT`, () => {});
         
         // New table for project metadata
         db.run(`CREATE TABLE IF NOT EXISTS projects (
@@ -85,16 +87,37 @@ const db = new sqlite3.Database(dbPath, (err) => {
 
 // Proxy endpoint to execute requests
 app.post('/api/execute', async (req, res) => {
-  const { method, url, headers, data, auth, ignoreSSL } = req.body;
+  const { method, url, headers, data, multipartData, auth, ignoreSSL } = req.body;
   const startTime = Date.now();
 
   try {
+    let requestData = data || undefined;
+    let requestHeaders = { ...(headers || {}) };
+
+    if (multipartData && Array.isArray(multipartData) && multipartData.length > 0) {
+      const form = new FormData();
+      multipartData.forEach(param => {
+        if (!param.key) return;
+        if (param.type === 'file' && param.fileData) {
+          const buffer = Buffer.from(param.fileData, 'base64');
+          form.append(param.key, buffer, {
+            filename: param.fileName || 'file',
+            contentType: param.mimeType || 'application/octet-stream',
+          });
+        } else {
+          form.append(param.key, param.value || '');
+        }
+      });
+      requestData = form;
+      Object.assign(requestHeaders, form.getHeaders());
+    }
+
     const config = {
       method,
       url,
-      headers: headers || {},
-      data: data || undefined,
-      validateStatus: () => true, // Don't throw on 4xx/5xx
+      headers: requestHeaders,
+      data: requestData,
+      validateStatus: () => true,
       httpsAgent: ignoreSSL ? new https.Agent({ rejectUnauthorized: false }) : undefined,
     };
 
@@ -144,9 +167,12 @@ app.post('/api/execute', async (req, res) => {
     });
   } catch (error) {
     const duration = Date.now() - startTime;
+    const msg = error.message || '';
+    const sslError = /certificate|SSL|CERT_|UNABLE_TO_GET_ISSUER/i.test(msg);
     res.status(500).json({
-      error: error.message,
+      error: msg,
       time: `${duration}ms`,
+      sslError,
     });
   }
 });
@@ -186,9 +212,9 @@ app.get('/api/requests', (req, res) => {
 });
 
 app.post('/api/requests', (req, res) => {
-  const { name, project, method, url, headers, body, auth, bodyType, formParams, ignoreSSL, response, folderId } = req.body;
+  const { name, project, method, url, headers, body, auth, bodyType, formParams, multipartParams, ignoreSSL, response, folderId } = req.body;
   db.run(
-    `INSERT INTO saved_requests (name, project, method, url, headers, body, auth, body_type, form_params, ignore_ssl, response_status, response_time, response_data, response_headers, folder_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO saved_requests (name, project, method, url, headers, body, auth, body_type, form_params, multipart_params, ignore_ssl, response_status, response_time, response_data, response_headers, folder_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       name,
       project || 'Default',
@@ -199,6 +225,7 @@ app.post('/api/requests', (req, res) => {
       JSON.stringify(auth),
       bodyType || 'raw',
       formParams ? JSON.stringify(formParams) : null,
+      multipartParams ? JSON.stringify(multipartParams) : null,
       ignoreSSL ? 1 : 0,
       response?.status ?? null,
       response?.time ?? null,
@@ -214,9 +241,9 @@ app.post('/api/requests', (req, res) => {
 });
 
 app.put('/api/requests/:id', (req, res) => {
-  const { name, project, method, url, headers, body, auth, bodyType, formParams, ignoreSSL, response, folderId } = req.body;
+  const { name, project, method, url, headers, body, auth, bodyType, formParams, multipartParams, ignoreSSL, response, folderId } = req.body;
   db.run(
-    `UPDATE saved_requests SET name=?, project=?, method=?, url=?, headers=?, body=?, auth=?, body_type=?, form_params=?, ignore_ssl=?, response_status=?, response_time=?, response_data=?, response_headers=?, folder_id=?, timestamp=CURRENT_TIMESTAMP WHERE id=?`,
+    `UPDATE saved_requests SET name=?, project=?, method=?, url=?, headers=?, body=?, auth=?, body_type=?, form_params=?, multipart_params=?, ignore_ssl=?, response_status=?, response_time=?, response_data=?, response_headers=?, folder_id=?, timestamp=CURRENT_TIMESTAMP WHERE id=?`,
     [
       name,
       project || 'Default',
@@ -227,6 +254,7 @@ app.put('/api/requests/:id', (req, res) => {
       JSON.stringify(auth),
       bodyType || 'raw',
       formParams ? JSON.stringify(formParams) : null,
+      multipartParams ? JSON.stringify(multipartParams) : null,
       ignoreSSL ? 1 : 0,
       response?.status ?? null,
       response?.time ?? null,
@@ -531,9 +559,15 @@ const toPostmanItem = (row) => {
       url: { raw: row.url },
       header: Object.entries(headerObj).map(([key, value]) => ({ key, value, type: 'text' })),
       body: row.body ? {
-        mode: row.body_type === 'form-urlencoded' ? 'urlencoded' : 'raw',
+        mode: row.body_type === 'form-urlencoded' ? 'urlencoded' : row.body_type === 'multipart' ? 'formdata' : 'raw',
         raw: row.body_type === 'raw' ? row.body : undefined,
-        urlencoded: row.body_type === 'form-urlencoded' ? JSON.parse(row.form_params || '[]').map(p => ({ key: p.key, value: p.value, type: 'text' })) : undefined
+        urlencoded: row.body_type === 'form-urlencoded' ? JSON.parse(row.form_params || '[]').map(p => ({ key: p.key, value: p.value, type: 'text' })) : undefined,
+        formdata: row.body_type === 'multipart' ? JSON.parse(row.multipart_params || '[]').map(p => ({
+          key: p.key,
+          value: p.type === 'text' ? p.value : undefined,
+          type: p.type || 'text',
+          src: p.type === 'file' ? p.fileName : undefined,
+        })) : undefined
       } : undefined,
       auth: authObj ? {
         type: authObj.type,
@@ -726,12 +760,13 @@ app.post('/api/import', (req, res) => {
           runImport();
         } else {
           db.run(
-            `UPDATE saved_requests SET method=?, url=?, headers=?, body=?, auth=?, body_type=?, form_params=?, ignore_ssl=?, response_status=?, response_time=?, response_data=?, response_headers=?, folder_id=?, timestamp=CURRENT_TIMESTAMP WHERE id=?`,
+            `UPDATE saved_requests SET method=?, url=?, headers=?, body=?, auth=?, body_type=?, form_params=?, multipart_params=?, ignore_ssl=?, response_status=?, response_time=?, response_data=?, response_headers=?, folder_id=?, timestamp=CURRENT_TIMESTAMP WHERE id=?`,
             [
               item.method, item.url, JSON.stringify(item.headers),
               typeof item.body === 'string' ? item.body : JSON.stringify(item.body),
               JSON.stringify(item.auth), item.bodyType || 'raw',
               item.formParams ? JSON.stringify(item.formParams) : null,
+              item.multipartParams ? JSON.stringify(item.multipartParams) : null,
               item.ignoreSSL ? 1 : 0, item.response?.status ?? null,
               item.response?.time ?? null, item.response?.data ? JSON.stringify(item.response.data) : null,
               item.response?.headers ? JSON.stringify(item.response.headers) : null,
@@ -743,12 +778,13 @@ app.post('/api/import', (req, res) => {
         }
       } else {
         db.run(
-          `INSERT INTO saved_requests (name, project, method, url, headers, body, auth, body_type, form_params, ignore_ssl, response_status, response_time, response_data, response_headers, folder_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO saved_requests (name, project, method, url, headers, body, auth, body_type, form_params, multipart_params, ignore_ssl, response_status, response_time, response_data, response_headers, folder_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             item.name, item.project, item.method, item.url, JSON.stringify(item.headers),
             typeof item.body === 'string' ? item.body : JSON.stringify(item.body),
             JSON.stringify(item.auth), item.bodyType || 'raw',
             item.formParams ? JSON.stringify(item.formParams) : null,
+            item.multipartParams ? JSON.stringify(item.multipartParams) : null,
             item.ignoreSSL ? 1 : 0, item.response?.status ?? null,
             item.response?.time ?? null, item.response?.data ? JSON.stringify(item.response.data) : null,
             item.response?.headers ? JSON.stringify(item.response.headers) : null,

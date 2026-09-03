@@ -1,113 +1,532 @@
-# API Client Web Application Specification
+# API Client & Inventory System - Specification
 
-## 1. Project Overview
-A web-based API client (similar to Postman) that allows users to test and interact with REST APIs directly from their local environment. The application will support standard HTTP methods, various authentication mechanisms, and provide rich response visualization.
+## 1. Visión General
 
-## 2. Core Features
+La aplicación es un **sistema integral de gestión de APIs** compuesto por tres módulos principales:
 
-### 2.1 Request Builder
-- **HTTP Methods:** Support for `GET`, `POST`, `PUT`, `DELETE`, `PATCH`, `HEAD`, `OPTIONS`.
-- **URL Entry:** Input field for the target endpoint.
-- **Headers:** Key-value pair editor for custom request headers.
-- **Body:**
-  - Support for `raw` content.
-  - Built-in `JSON` editor with syntax highlighting.
-- **Authorization Modes:**
-  - **No Auth:** Default mode.
-  - **Bearer Token:** Input for JWT/Tokens.
-  - **API Key:** Key-value pairs with placement options (Header or Query Params).
-  - **Basic Auth:** Username and Password fields (Base64 encoded automatically).
+1. **API Client** — Cliente HTTP con pestañas estilo Chrome (funcionalidad existente)
+2. **API Inventory** — Sistema de inventario, monitoreo y documentación de APIs
+3. **Load Testing** — Módulo de pruebas de concurrencia y tiempos de respuesta
 
-### 2.2 Response Viewer
-- **Status Codes:** Display of HTTP status codes (e.g., 200 OK, 404 Not Found).
-- **Execution Time:** Duration of the request.
-- **Visualization Modes:**
-  - **JSON:** Formatted and syntax-highlighted.
-  - **XML:** Formatted and syntax-highlighted.
-  - **HTML:** Rendered view or source code.
-  - **Text:** Raw response body.
-- **Headers:** View returned response headers.
-
-### 2.3 History & Collections (Persistence)
-- **Local Storage/Database:** Integration with **SQLite** to persist request history.
-- **Save Invocations:** Ability to name and save specific requests for future reuse.
-- **Enhanced Save Feature:** When saving, stores complete request configuration:
-  - Method, URL, headers, body
-  - Body type (raw/form-urlencoded) and form parameters
-  - Ignore SSL flag
-  - Last response data (status, time, response data, response headers)
-- **Update Behavior:** Loading a saved request and clicking "Save" again updates the existing record instead of creating a duplicate.
-- **History Sidebar:** Quickly access and re-run previous calls.
-
-### 2.4 Export / Import (Postman Collection v2.1)
-- **Export:**
-  - Export all requests to a **Postman Collection v2.1** JSON file.
-  - Export a single project group as a Postman Collection.
-  - Export a single endpoint by ID.
-- **Import:**
-  - Import Postman Collection v2.1 JSON files.
-  - Supports nested folders (converted to projects).
-  - **Duplicate Detection:** If a request with the same `name + project` already exists, a modal allows choosing:
-    - **Overwrite** — update the existing record.
-    - **Skip** — leave the existing record untouched.
-  - Full mapping of: method, URL, headers, body (raw & urlencoded), auth (bearer, basic, API key).
-
-### 2.5 Drag & Drop Reordering
-- **Endpoint Reordering:** Drag and drop individual saved requests to reorder them within a project or move them to another project.
-- **Project Reordering:** Drag and drop project headers to reorder entire project groups.
-- **Persistence:** Sort order is persisted in SQLite via `sort_order` column and `projects` table.
-
-### 2.6 UI/UX Improvements
-- **Sidebar Toggle:** Collapsed by default. Toggle button positioned inside the sidebar header (open) or fixed top-left (closed).
-- **Sidebar Actions:** Import (📥) and Export (📤) buttons in sidebar header.
-- **Visual Feedback:** Blue highlight line when dragging over a drop target (item or project).
-- **Grab Cursor:** Project headers show grab/grabbing cursor during drag.
-
-## 3. Technical Stack
-- **Frontend:** React (TypeScript) for a modern, responsive UI.
-- **Styling:** Vanilla CSS with a dark-themed, professional aesthetic (gradients, high-contrast interactive elements).
-- **Backend/Proxy:** Node.js (Express) to handle cross-origin (CORS) requests and interact with SQLite.
-- **Database:** SQLite for lightweight local persistence.
+Los módulos son navegables desde una barra superior y comparten datos entre sí.
 
 ---
 
-## 4. Implementation Plan (Sprints)
+## 2. Arquitectura
 
-### Sprint 1: Foundation & UI Skeleton
-- **Goal:** Set up the project structure and the basic layout.
-- **Tasks:**
-  - Initialize React + Express project.
-  - Create the main layout (Sidebar for history, Header for URL, Main area for Request/Response).
-  - Implement the Method Selector and URL bar.
-  - Style with Vanilla CSS (Dark mode, interactive transitions).
+### 2.1 Stack Tecnológico
 
-### Sprint 2: Request Execution & Authentication
-- **Goal:** Enable the ability to send real API requests.
-- **Tasks:**
-  - Implement the Express proxy to bypass CORS issues for local development.
-  - Build the Header and Auth configuration panels.
-  - Implement Bearer Token, API Key, and Basic Auth logic.
-  - Connect the "Send" button to the backend executor.
+| Capa | Tecnología |
+|------|-----------|
+| Frontend | React 19 + TypeScript + Vite |
+| Backend | Express 5 + SQLite |
+| Gráficas | Recharts |
+| Documentación | React Markdown |
+| Persistencia | SQLite + localStorage (pestañas) |
 
-### Sprint 3: Body Editor & Response Visualization
-- **Goal:** Handle complex data and display results clearly.
-- **Tasks:**
-  - Integrate a JSON editor/viewer (or custom implementation with syntax highlighting).
-  - Implement the Response Viewer tabs (Text, JSON, HTML, XML).
-  - Add logic to auto-detect response types.
-  - Implement timing and status code display.
+### 2.2 Navegación Superior
 
-### Sprint 4: Persistence (SQLite) & History
-- **Goal:** Save and retrieve previous work.
-- **Tasks:**
-  - Set up SQLite database schema (Requests table).
-  - Implement CRUD operations in the backend for saved requests.
-  - Build the History Sidebar with "Click to Load" functionality.
-  - Final UI polish and error handling (toast notifications for failed requests).
+```
+┌─────────────────────────────────────────────────────┐
+│  [ API Client ]  [ API Inventory ]  [ Load Testing ] │
+├─────────────────────────────────────────────────────┤
+│                                                     │
+│  (Contenido del módulo seleccionado)                │
+│                                                     │
+└─────────────────────────────────────────────────────┘
+```
 
-### Sprint 5: Testing & Final Polish
-- **Goal:** Ensure stability and visual excellence.
-- **Tasks:**
-  - Unit testing for request transformation logic.
-  - Integration testing for the proxy layer.
-  - Final visual review (consistency in spacing, hover states, and accessibility).
+Cada módulo es una vista independiente. El estado se comparte a través de la base de datos.
+
+---
+
+## 3. Módulo 1: API Client (Funcionalidad Existente)
+
+### 3.1 Pestañas estilo Chrome
+
+- Múltiples APIs abiertas simultáneamente en pestañas
+- Scroll horizontal con mouse wheel
+- Cada pestaña tiene: method badge, nombre, indicador de cambios sin guardar (•), botón cerrar (×)
+- Botón + para nueva pestaña
+- Persistencia en localStorage (se restauran al recargar)
+- Confirmación al cerrar si hay cambios sin guardar
+
+### 3.2 Configuración por pestaña
+
+Cada pestaña contiene:
+- Method selector (GET, POST, PUT, DELETE, PATCH)
+- URL input
+- SSL toggle
+- Config tabs: Headers, Auth, Body
+- Body modes: Raw (JSON/Text), x-www-form-urlencoded, multipart/form-data
+- Multipart support: text fields + file attachments (base64-encoded)
+- Botones: Send, Save, Curl
+
+### 3.3 Integración con Inventario
+
+- Al ejecutar un request, si la URL coincide con una API en inventario, se registra automáticamente en estadísticas
+- Desde el inventario, se puede "Abrir en Cliente" (crea pestaña con configuración pre-cargada)
+
+---
+
+## 4. Módulo 2: API Inventory
+
+### 4.1 Navegación del Módulo
+
+```
+Inventory → Dashboard → Detalle de API → Pestañas de detalle
+```
+
+### 4.2 Dashboard (`InventoryDashboard`)
+
+#### Filtros
+- Proyecto (dropdown)
+- Estado (active/inactive/deprecated)
+- Búsqueda por nombre
+
+#### Métricas Resumen
+- Total de APIs
+- APIs activas
+- APIs inactivas
+- Total de endpoints
+
+#### Tarjetas de API
+Cada tarjeta muestra:
+- Indicador de estado (🟢 activo, 🟡 inactivo, 🔴 deprecated)
+- Nombre de la API
+- Método y path del endpoint principal
+- Número total de llamadas
+- Tiempo promedio de respuesta
+- Botones: Ver, Editar, Abrir en Cliente
+
+### 4.3 Detalle de API (`ApiDetailView`)
+
+Vista de detalle con pestañas:
+
+#### Pestaña: Resumen (`ApiSummary`)
+- Nombre, descripción, URL base, estado
+- Estadísticas rápidas (llamadas totales, tasa de éxito, tiempo promedio)
+- Últimas 10 actividades recientes
+- Botón "Abrir en Cliente"
+
+#### Pestaña: Endpoints (`ApiEndpoints`)
+- Lista de endpoints registrados
+- CRUD: crear, editar, eliminar endpoints
+- Formulario por endpoint:
+  - Method (GET, POST, PUT, DELETE, PATCH)
+  - Path (ej: /users/:id)
+  - Descripción
+  - Request example (JSON)
+  - Response example (JSON)
+  - Error codes (JSON array: [{code, description}])
+  - Notes (Markdown)
+
+#### Pestaña: Dependencias (`ApiDependencies`)
+- Visualización tipo grafo (SVG)
+- Tipos de dependencia:
+  - 📊 Datos (data): necesita resultado de otra API
+  - 🔐 Auth (auth): comparte credenciales
+  - 📁 Jerárquica (hierarchical): subrecurso
+- CRUD para agregar/quitar dependencias
+
+#### Pestaña: Documentación (`ApiDocumentation`)
+- Editor Markdown con preview en vivo
+- Renderizado de documentación formateada
+- Versión de documentación
+- Botones: Guardar, Exportar, Importar
+
+#### Pestaña: Estadísticas (`ApiStatistics`)
+- Gráfica de tiempos de respuesta (Recharts LineChart)
+- Gráfica de tasa de éxito (Recharts BarChart)
+- Tabla de resumen por endpoint
+- Filtros de tiempo: 24h, 7 días, 30 días
+
+### 4.4 Endpoints del Servidor
+
+| Método | Ruta | Descripción |
+|--------|------|-------------|
+| `GET` | `/api/inventory` | Listar APIs (?project=&status=) |
+| `POST` | `/api/inventory` | Crear API |
+| `PUT` | `/api/inventory/:id` | Actualizar API |
+| `DELETE` | `/api/inventory/:id` | Eliminar API |
+| `GET` | `/api/inventory/:id/endpoints` | Listar endpoints |
+| `POST` | `/api/inventory/:id/endpoints` | Crear endpoint |
+| `PUT` | `/api/inventory/endpoints/:id` | Actualizar endpoint |
+| `DELETE` | `/api/inventory/endpoints/:id` | Eliminar endpoint |
+| `GET` | `/api/inventory/dependencies` | Listar dependencias |
+| `POST` | `/api/inventory/dependencies` | Crear dependencia |
+| `DELETE` | `/api/inventory/dependencies/:id` | Eliminar dependencia |
+| `GET` | `/api/inventory/:id/stats` | Estadísticas de API |
+| `GET` | `/api/inventory/stats/overview` | Resumen general |
+| `GET` | `/api/inventory/activity` | Log de actividad |
+| `POST` | `/api/inventory/track` | Registrar invocación |
+| `GET` | `/api/inventory/export` | Exportar inventario completo |
+| `POST` | `/api/inventory/import` | Importar inventario |
+
+### 4.5 Integración con API Client
+
+1. **Desde Inventario → Cliente**: Botón "Abrir en Cliente" crea pestaña con configuración pre-cargada
+2. **Desde Cliente → Inventario**: Al guardar un request, opción "Agregar al Inventario"
+3. **Tracking automático**: Al ejecutar un request, si la URL coincide con una API en inventario, se registra en estadísticas
+
+---
+
+## 5. Módulo 3: Load Testing
+
+### 5.1 Configuración de Prueba
+
+```
+┌──────────────────────────────────────────────────────────┐
+│ Prueba de Carga                                          │
+├──────────────────────────────────────────────────────────┤
+│ API: [Seleccionar API ▼]                                 │
+│ Endpoint: [Seleccionar Endpoint ▼]                       │
+│ URL: [https://api.example.com/users]                     │
+│ Method: [GET ▼]                                          │
+│ Headers: [Editor]                                         │
+│ Body: [Editor]                                            │
+├──────────────────────────────────────────────────────────┤
+│ Configuración:                                           │
+│ Concurrencia: [10] requests simultáneos                  │
+│ Duración: [30] segundos                                  │
+│ Ramp-up: [5] segundos (incremento gradual)               │
+│ Intervalo: [0] ms entre requests (0 = sin delay)         │
+├──────────────────────────────────────────────────────────┤
+│                    [ Iniciar Prueba ]                     │
+└──────────────────────────────────────────────────────────┘
+```
+
+### 5.2 Ejecución en Tiempo Real
+
+Durante la ejecución:
+
+```
+┌──────────────────────────────────────────────────────────┐
+│ Ejecutando... ████████████░░░░░░░░ 60%   18s / 30s       │
+├──────────────────────────────────────────────────────────┤
+│ Requests: 1,245 / 2,000    Exito: 98.2%   RPM: 2,490    │
+│ Tiempo promedio: 145ms     Actual: 132ms                 │
+└──────────────────────────────────────────────────────────┘
+```
+
+### 5.3 Resultados
+
+#### Resumen
+- Total de requests, exitosos, fallidos
+- Tiempos: promedio, min, max, P50, P90, P95, P99
+- Requests por segundo
+- Duración total
+
+#### Gráficas
+- **Distribución de tiempos** (histograma): Cuántos requests cayeron en cada rango
+- **Línea de tiempo**: Tiempo de respuesta a lo largo de la prueba
+- **Throughput**: Requests por segundo a lo largo de la prueba
+
+#### Tabla de Errores
+- Códigos de error y sus frecuencias
+
+### 5.4 Historial de Pruebas
+
+- Lista de pruebas anteriores
+- Comparativa entre pruebas (¿mejoró o empeoró?)
+- Botón "Repetir prueba" con la misma configuración
+
+### 5.5 Integración con Inventario
+
+- Los resultados se guardan y se asocian a la API en el inventario
+- Las estadísticas del inventario se actualizan con los datos de las pruebas
+- Se puede ver el historial de pruebas en la pestaña de estadísticas
+
+### 5.6 Endpoints del Servidor
+
+| Método | Ruta | Descripción |
+|--------|------|-------------|
+| `POST` | `/api/loadtest/run` | Ejecutar prueba de carga |
+| `GET` | `/api/loadtest/results` | Historial de pruebas (?api_id=) |
+| `GET` | `/api/loadtest/results/:id` | Detalle de una prueba |
+| `DELETE` | `/api/loadtest/results/:id` | Eliminar resultado |
+
+---
+
+## 6. Base de Datos
+
+### 6.1 Tablas Existentes (sin cambios)
+
+- `history` — Historial de requests ejecutados
+- `saved_requests` — Requests guardados
+- `projects` — Proyectos (agrupación)
+- `folders` — Carpetas (jerarquía dentro de proyectos)
+
+### 6.2 Nuevas Tablas
+
+#### `api_inventory`
+| Columna | Tipo | Descripción |
+|---------|------|-------------|
+| `id` | INTEGER PK | ID autoincremental |
+| `name` | TEXT NOT NULL | Nombre de la API |
+| `description` | TEXT | Descripción |
+| `base_url` | TEXT | URL base |
+| `auth_type` | TEXT DEFAULT 'none' | Tipo de autenticación |
+| `status` | TEXT DEFAULT 'active' | Estado: active, inactive, deprecated |
+| `project` | TEXT DEFAULT 'Default' | Proyecto al que pertenece |
+| `created_at` | DATETIME | Fecha de creación |
+| `updated_at` | DATETIME | Última actualización |
+
+#### `api_endpoints`
+| Columna | Tipo | Descripción |
+|---------|------|-------------|
+| `id` | INTEGER PK | ID autoincremental |
+| `api_id` | INTEGER FK | Referencia a api_inventory.id |
+| `name` | TEXT | Nombre del endpoint |
+| `method` | TEXT NOT NULL | Método HTTP |
+| `path` | TEXT NOT NULL | Ruta (ej: /users/:id) |
+| `description` | TEXT | Descripción |
+| `request_example` | TEXT | Ejemplo de request (JSON) |
+| `response_example` | TEXT | Ejemplo de respuesta (JSON) |
+| `error_codes` | TEXT | Códigos de error (JSON array) |
+| `notes` | TEXT | Notas en Markdown |
+| `sort_order` | INTEGER DEFAULT 0 | Orden |
+| `created_at` | DATETIME | Fecha de creación |
+| `updated_at` | DATETIME | Última actualización |
+
+#### `api_dependencies`
+| Columna | Tipo | Descripción |
+|---------|------|-------------|
+| `id` | INTEGER PK | ID autoincremental |
+| `source_api_id` | INTEGER FK | API que depende |
+| `target_api_id` | INTEGER FK | API de la que depende |
+| `dependency_type` | TEXT NOT NULL | Tipo: data, auth, hierarchical |
+| `description` | TEXT | Descripción de la dependencia |
+| `created_at` | DATETIME | Fecha de creación |
+
+#### `api_statistics`
+| Columna | Tipo | Descripción |
+|---------|------|-------------|
+| `id` | INTEGER PK | ID autoincremental |
+| `api_id` | INTEGER FK | Referencia a api_inventory.id |
+| `endpoint_id` | INTEGER FK | Referencia a api_endpoints.id (nullable) |
+| `call_count` | INTEGER DEFAULT 0 | Total de llamadas |
+| `success_count` | INTEGER DEFAULT 0 | Llamadas exitosas |
+| `error_count` | INTEGER DEFAULT 0 | Llamadas con error |
+| `avg_response_time` | REAL DEFAULT 0 | Tiempo promedio |
+| `min_response_time` | REAL DEFAULT 999999 | Tiempo mínimo |
+| `max_response_time` | REAL DEFAULT 0 | Tiempo máximo |
+| `last_called_at` | DATETIME | Última llamada |
+| `last_status` | INTEGER | Último código de estado |
+| `last_response_time` | REAL | Último tiempo de respuesta |
+| `updated_at` | DATETIME | Última actualización |
+
+#### `api_activity_log`
+| Columna | Tipo | Descripción |
+|---------|------|-------------|
+| `id` | INTEGER PK | ID autoincremental |
+| `api_id` | INTEGER FK | Referencia a api_inventory.id |
+| `endpoint_id` | INTEGER FK | Referencia a api_endpoints.id (nullable) |
+| `action` | TEXT NOT NULL | Acción: call, save, edit, test |
+| `status` | INTEGER | Código de estado HTTP |
+| `response_time` | REAL | Tiempo de respuesta |
+| `details` | TEXT | Detalles adicionales |
+| `timestamp` | DATETIME | Fecha/hora |
+
+#### `load_test_results`
+| Columna | Tipo | Descripción |
+|---------|------|-------------|
+| `id` | INTEGER PK | ID autoincremental |
+| `api_id` | INTEGER FK | Referencia a api_inventory.id |
+| `endpoint_id` | INTEGER FK | Referencia a api_endpoints.id (nullable) |
+| `url` | TEXT NOT NULL | URL probada |
+| `method` | TEXT NOT NULL | Método HTTP |
+| `concurrency` | INTEGER NOT NULL | Nivel de concurrencia |
+| `total_requests` | INTEGER NOT NULL | Total de requests |
+| `successful_requests` | INTEGER DEFAULT 0 | Requests exitosos |
+| `failed_requests` | INTEGER DEFAULT 0 | Requests fallidos |
+| `avg_response_time` | REAL | Tiempo promedio |
+| `min_response_time` | REAL | Tiempo mínimo |
+| `max_response_time` | REAL | Tiempo máximo |
+| `p50_response_time` | REAL | Percentil 50 |
+| `p90_response_time` | REAL | Percentil 90 |
+| `p95_response_time` | REAL | Percentil 95 |
+| `p99_response_time` | REAL | Percentil 99 |
+| `requests_per_second` | REAL | Throughput |
+| `duration_seconds` | REAL | Duración |
+| `results_json` | TEXT | Detalle por request |
+| `created_at` | DATETIME | Fecha de creación |
+
+### 6.3 Columnas Nuevas en `saved_requests`
+
+```sql
+ALTER TABLE saved_requests ADD COLUMN api_id INTEGER;
+ALTER TABLE saved_requests ADD COLUMN endpoint_id INTEGER;
+```
+
+---
+
+## 7. Dependencias
+
+### 7.1 Dependencias Existentes (sin cambios)
+
+**Cliente:**
+- react ^19.2.5
+- react-dom ^19.2.5
+
+**Servidor:**
+- axios ^1.16.0
+- better-sqlite3 ^12.9.0
+- cors ^2.8.6
+- dotenv ^17.4.2
+- express ^5.2.1
+- form-data ^4.0.1
+- sqlite3 ^6.0.1
+
+### 7.2 Nuevas Dependencias
+
+**Cliente:**
+- `recharts` — Gráficas para estadísticas y reportes
+- `react-markdown` — Renderizado de documentación Markdown
+
+**Servidor:**
+- Sin dependencias nuevas
+
+---
+
+## 8. Diagrama de Componentes
+
+```
+App.tsx
+├── Navegación Superior
+│   ├── [API Client]
+│   ├── [API Inventory]
+│   └── [Load Testing]
+│
+├── API Client (funcionalidad existente)
+│   ├── Sidebar
+│   │   ├── History
+│   │   └── Saved Requests
+│   ├── Tab Bar (Chrome-style)
+│   ├── Request Config
+│   │   ├── Headers
+│   │   ├── Auth
+│   │   └── Body
+│   └── Response Section
+│
+├── API Inventory
+│   ├── InventoryDashboard
+│   │   ├── Métricas Resumen
+│   │   ├── Filtros
+│   │   └── Tarjetas de API
+│   └── ApiDetailView
+│       ├── ApiSummary
+│       ├── ApiEndpoints
+│       ├── ApiDependencies
+│       ├── ApiDocumentation
+│       └── ApiStatistics
+│
+└── Load Testing
+    ├── LoadTestConfig
+    ├── LoadTestExecution
+    ├── LoadTestResults
+    └── LoadTestHistory
+```
+
+---
+
+## 9. Casos de Uso
+
+### CU-01: Registrar una nueva API en el inventario
+1. Usuario navega a API Inventory
+2. Hace clic en "+ Nueva API"
+3. Completa: nombre, descripción, URL base, estado, proyecto
+4. Guarda
+5. La API aparece en el dashboard
+
+### CU-02: Agregar endpoints a una API
+1. Usuario selecciona una API del dashboard
+2. Navega a pestaña "Endpoints"
+3. Hace clic en "Agregar Endpoint"
+4. Completa: method, path, descripción, ejemplos
+5. Guarda
+
+### CU-03: Definir dependencias entre APIs
+1. Usuario selecciona una API
+2. Navega a pestaña "Dependencias"
+3. Hace clic en "Agregar Dependencia"
+4. Selecciona API destino y tipo de dependencia
+5. Guarda
+
+### CU-04: Ejecutar request y registrar estadísticas
+1. Usuario abre API Client
+2. Selecciona o crea una pestaña
+3. Ejecuta un request (Send)
+4. El servidor:
+   - Ejecuta el request
+   - Guarda en historial
+   - Si la URL coincide con una API en inventario, registra en api_statistics y api_activity_log
+5. El cliente muestra la respuesta
+
+### CU-05: Documentar una API
+1. Usuario selecciona una API
+2. Navega a pestaña "Documentación"
+3. Escribe documentación en Markdown
+4. Preview se actualiza en tiempo real
+5. Guarda
+
+### CU-06: Ver reportes de una API
+1. Usuario selecciona una API
+2. Navega a pestaña "Estadísticas"
+3. Ve gráficas de tiempos de respuesta y tasas de éxito
+4. Puede filtrar por rango de tiempo
+
+### CU-07: Ejecutar prueba de carga
+1. Usuario navega a Load Testing
+2. Selecciona API y endpoint
+3. Configura: concurrencia, duración, ramp-up
+4. Hace clic en "Iniciar Prueba"
+5. Ve progreso en tiempo real
+6. Ve resultados al finalizar
+
+### CU-08: Comparar pruebas de carga
+1. Usuario navega a Load Testing
+2. Ve historial de pruebas
+3. Selecciona dos o más pruebas
+4. Compara métricas
+
+### CU-09: Exportar/Importar inventario
+1. Usuario hace clic en "Exportar"
+2. Se descarga JSON con todo el inventario
+3. En otra instancia, hace clic en "Importar"
+4. Selecciona el archivo JSON
+5. El inventario se restaura
+
+### CU-10: Abrir API desde inventario en el cliente
+1. Usuario selecciona una API en el inventario
+2. Hace clic en "Abrir en Cliente"
+3. Se crea una pestaña en el módulo cliente con la configuración pre-cargada
+
+---
+
+## 10. Requisitos No Funcionales
+
+- **Rendimiento**: El dashboard debe cargar en menos de 2 segundos
+- **Usabilidad**: La navegación debe ser intuitiva sin documentación
+- **Compatibilidad**: Chrome, Firefox, Edge (últimas 2 versiones)
+- **Datos**: Persistencia en SQLite (servidor) + localStorage (pestañas del cliente)
+- **Seguridad**: Sin autenticación en esta versión (próxima versión)
+
+---
+
+## 11. Restricciones
+
+- No se requiere autenticación en esta versión
+- Las estadísticas de uso son solo desde esta plataforma (no consumo externo)
+- El servidor es un solo archivo (index.js)
+- No se usan frameworks de componentes (todo es CSS custom)
+
+---
+
+## 12. Entregables
+
+1. `specification.md` — Este documento
+2. `plan.md` — Plan de implementación detallado
+3. Código fuente del servidor (`server/index.js`)
+4. Código fuente del cliente (`client/src/`)
+5. Estilos CSS (`client/src/App.css`)
