@@ -36,6 +36,7 @@ interface ApiTab {
   response: any;
   savedRequestId?: number;
   hasUnsavedChanges: boolean;
+  createdAt: number;
 }
 
 const STORAGE_KEY = 'apiClient_tabs';
@@ -87,6 +88,7 @@ function createDefaultTab(): ApiTab {
     activeResTab: 'JSON',
     response: null,
     hasUnsavedChanges: false,
+    createdAt: Date.now(),
   };
 }
 
@@ -112,9 +114,10 @@ function App() {
   const [tabs, setTabs] = useState<ApiTab[]>(() => {
     const saved = loadTabsFromStorage();
     const loadedTabs = saved?.tabs?.length ? saved.tabs : [createDefaultTab()];
-    return loadedTabs.map(tab => ({
+    return loadedTabs.map((tab, i) => ({
       ...tab,
       multipartParams: tab.multipartParams || [{ type: 'text', key: '', value: '' }],
+      createdAt: tab.createdAt || Date.now() - i,
     }));
   });
   const [activeTabIndex, setActiveTabIndex] = useState<number>(() => {
@@ -1213,14 +1216,28 @@ function App() {
       <main className="main-content">
         <div className="tabs-bar">
           <div className="tabs-container" ref={tabsContainerRef}>
-            {tabs.map((tab, index) => (
-              <div key={tab.id} className={`tab-item ${index === activeTabIndex ? 'active' : ''}`} onClick={() => setActiveTabIndex(index)}>
-                <span className={`method-tag ${tab.method}`}>{tab.method}</span>
-                <span className="tab-name">{tab.name}</span>
-                {tab.hasUnsavedChanges && <span className="tab-unsaved">{'\u2022'}</span>}
-                <button className="tab-close" onClick={(e) => { e.stopPropagation(); closeTab(index); }}>{'\u00d7'}</button>
-              </div>
-            ))}
+            {(() => {
+              const maxCreated = Math.max(...tabs.map(t => t.createdAt));
+              const minCreated = Math.min(...tabs.map(t => t.createdAt));
+              const range = maxCreated - minCreated || 1;
+              return tabs.map((tab, index) => {
+                const recency = (tab.createdAt - minCreated) / range;
+                const opacity = 0.45 + recency * 0.55;
+                return (
+                  <div
+                    key={tab.id}
+                    className={`tab-item ${index === activeTabIndex ? 'active' : ''}`}
+                    style={{ '--tab-opacity': opacity } as any}
+                    onClick={() => setActiveTabIndex(index)}
+                  >
+                    <span className={`method-tag ${tab.method}`}>{tab.method}</span>
+                    <span className="tab-name">{tab.name}</span>
+                    {tab.hasUnsavedChanges && <span className="tab-unsaved">{'\u2022'}</span>}
+                    <button className="tab-close" onClick={(e) => { e.stopPropagation(); closeTab(index); }}>{'\u00d7'}</button>
+                  </div>
+                );
+              });
+            })()}
           </div>
           <button className="tab-add-btn" onClick={() => addTab()}>+</button>
         </div>

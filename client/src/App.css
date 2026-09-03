@@ -844,8 +844,9 @@ body {
   white-space: nowrap;
   min-width: 0;
   max-width: 200px;
-  transition: background 0.15s ease;
+  transition: background 0.15s ease, opacity 0.3s ease;
   user-select: none;
+  opacity: var(--tab-opacity, 1);
 }
 
 .tab-item:hover {
@@ -855,6 +856,7 @@ body {
 .tab-item.active {
   background: var(--bg-header);
   border-bottom: 2px solid var(--accent-blue);
+  opacity: 1;
 }
 
 .tab-item .method-tag {
