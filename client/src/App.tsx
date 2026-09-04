@@ -1217,12 +1217,16 @@ function App() {
         <div className="tabs-bar">
           <div className="tabs-container" ref={tabsContainerRef}>
             {(() => {
-              const maxCreated = Math.max(...tabs.map(t => t.createdAt));
-              const minCreated = Math.min(...tabs.map(t => t.createdAt));
-              const range = maxCreated - minCreated || 1;
+              const sortedByAge = [...tabs]
+                .map((t, i) => ({ t, i }))
+                .sort((a, b) => b.t.createdAt - a.t.createdAt);
+              const recencyMap = new Map<number, number>();
+              const levels = [1.0, 0.88, 0.72, 0.56, 0.42];
+              sortedByAge.forEach(({ t, i }, rank) => {
+                recencyMap.set(i, levels[Math.min(rank, levels.length - 1)]);
+              });
               return tabs.map((tab, index) => {
-                const recency = (tab.createdAt - minCreated) / range;
-                const opacity = 0.45 + recency * 0.55;
+                const opacity = recencyMap.get(index) ?? 1;
                 return (
                   <div
                     key={tab.id}
