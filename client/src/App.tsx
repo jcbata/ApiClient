@@ -147,6 +147,13 @@ function App() {
 
   const activeTab = tabs[activeTabIndex] || tabs[0];
 
+  const switchTab = useCallback((index: number) => {
+    setActiveTabIndex(index);
+    setTabs(prev => prev.map((tab, i) =>
+      i === index ? { ...tab, createdAt: Date.now() } : tab
+    ));
+  }, []);
+
   const updateActiveTab = useCallback((updates: Partial<ApiTab>) => {
     setTabs(prev => prev.map((tab, i) =>
       i === activeTabIndex ? { ...tab, ...updates } : tab
@@ -357,7 +364,7 @@ function App() {
     if (isSaved && item.id) {
       const existingIndex = tabs.findIndex(t => t.savedRequestId === item.id);
       if (existingIndex >= 0) {
-        setActiveTabIndex(existingIndex);
+        switchTab(existingIndex);
         return;
       }
     }
@@ -1232,7 +1239,7 @@ function App() {
                     key={tab.id}
                     className={`tab-item ${index === activeTabIndex ? 'active' : ''}`}
                     style={{ '--tab-opacity': opacity } as any}
-                    onClick={() => setActiveTabIndex(index)}
+                    onClick={() => switchTab(index)}
                   >
                     <span className={`method-tag ${tab.method}`}>{tab.method}</span>
                     <span className="tab-name">{tab.name}</span>
