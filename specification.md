@@ -75,9 +75,15 @@ Cada pestaña contiene:
 
 ```
 Inventory → Dashboard → Detalle de API → Pestañas de detalle
+                ↓
+         Modal "Descubrir"
 ```
 
 ### 4.2 Dashboard (`InventoryDashboard`)
+
+#### Acciones principales
+- **+ New API**: Crear API manualmente (formulario)
+- **Descubrir**: Explorar y descubrir APIs automáticamente (múltiples métodos)
 
 #### Filtros
 - Proyecto (dropdown)
@@ -99,7 +105,148 @@ Cada tarjeta muestra:
 - Tiempo promedio de respuesta
 - Botones: Ver, Editar, Abrir en Cliente
 
-### 4.3 Detalle de API (`ApiDetailView`)
+### 4.3 Sistema de Descubrimiento de APIs (`ApiDiscovery`)
+
+Modal accesible desde el botón "Descubrir" en el dashboard. Permite encontrar APIs automáticamente mediante diferentes métodos de exploración.
+
+#### 4.3.1 Métodos de Descubrimiento
+
+##### Método 1: Desde Historial del Cliente (Básico)
+- **Fuente**: Tabla `history` del módulo API Client
+- **Lógica**: Analiza URLs ejecutadas, agrupa por dominio/base URL, identifica patrones de paths
+- **Proceso**:
+  1. Consulta `SELECT DISTINCT url, method FROM history`
+  2. Extrae base URL (dominio + puerto) de cada URL
+  3. Agrupa endpoints por base URL
+  4. Detecta versionado (`/v1/`, `/v2/`, `/api/`)
+  5. Muestra resultados para que el usuario seleccione cuáles crear
+- **Resultado**: Lista de APIs candidatas con sus endpoints detectados
+- **Ventaja**: No requiere conexión externa, usa datos ya existentes
+
+##### Método 2: Exploración Swagger/OpenAPI (Intermedio)
+- **Fuente**: URL base del API a explorar
+- **Lógica**: Intenta encontrar archivos de documentación OpenAPI/Swagger
+- **Proceso**:
+  1. Recibe URL base del usuario (ej: `https://api.example.com`)
+  2. Intenta acceder a endpoints comunes de documentación:
+     - `/swagger.json`, `/swagger/v1/swagger.json`
+     - `/api-docs`, `/openapi.json`, `/openapi.yaml`
+     - `/docs/swagger.json`, `/api/swagger.json`
+     - `/-/openapi.json` (GitLab style)
+  3. Si encuentra un archivo OpenAPI válido, lo parsea
+  4. Extrae: nombre, base URL, endpoints (method, path, descripción, parámetros)
+  5. Muestra resultados para confirmación del usuario
+- **Resultado**: API completa con todos los endpoints documentados
+- **Ventaja**: Información rica y estructurada
+
+##### Método 3: Crawling de Aplicación Web (Avanzado)
+- **Fuente**: URL de una aplicación web
+- **Lógica**: Navega la aplicación interceptando llamadas API
+- **Proceso**:
+  1. Recibe URL inicial de la aplicación
+  2. Realiza request GET a la URL
+  3. Analiza la respuesta buscando:
+     - Links (`<a href>`) para seguir navegando
+     - Scripts JavaScript que contengan endpoints
+     - Formularios con URLs de acción
+     - Meta tags con URLs de API
+  4. Sigue links internos (mismo dominio) hasta profundidad configurable
+  5. Registra todas las URLs encontradas que parezcan APIs
+- **Resultado**: Mapa de endpoints de la aplicación
+- **Ventaja**: Descubre APIs que no están documentadas
+
+##### Método 4: Sondeo de Endpoints Comunes (Brute Force)
+- **Fuente**: URL base del dominio
+- **Lógica**: Prueba paths comunes de APIs para verificar si existen
+- **Proceso**:
+  1. Recibe URL base
+  2. Prueba paths comunes con HEAD/GET:
+     - Prefijos: `/api/`, `/v1/`, `/v2/`, `/v3/`, `/rest/`
+     - Recursos: `/users`, `/items`, `/products`, `/orders`, `/auth`, `/login`
+     - Health: `/health`, `/healthz`, `/status`, `/ping`
+  3. Registra los que respondan (status 200-499, no 404/405)
+  4. Para los encontrados, intenta inferir estructura
+- **Resultado**: Lista de endpoints activos en el dominio
+- **Ventaja**: Encuentra APIs no documentadas, útil para auditorías
+
+#### 4.3.2 Flujo del Modal "Descubrir"
+
+```
+┌─────────────────────────────────────────────────────┐
+│  Discover APIs                                       │
+├─────────────────────────────────────────────────────┤
+│                                                     │
+│  Method: [Select ▼]                                 │
+│    ○ From API Client History                        │
+│    ○ Swagger/OpenAPI Scanner                        │
+│    ○ Web Application Crawler                        │
+│    ○ Common Endpoint Probing                        │
+│                                                     │
+│  ── If History ──                                   │
+│  (shows detected APIs from history automatically)   │
+│                                                     │
+│  ── If Swagger/Crawler/Probing ──                   │
+│  Base URL: [https://api.example.com     ]           │
+│  Depth: [3] (for crawler)                           │
+│                                                     │
+│  [ Start Discovery ]                                │
+│                                                     │
+│  ── Results ──                                      │
+│  ☑ Users API    (12 endpoints)  /v1/users           │
+│  ☑ Orders API   (8 endpoints)   /v1/orders          │
+│  ☐ Auth Service (2 endpoints)   /auth               │
+│                                                     │
+│  [ Import Selected (3) ]  [ Cancel ]                │
+└─────────────────────────────────────────────────────┘
+```
+
+#### 4.3.3 Modal de Confirmación
+
+Antes de importar, muestra los resultados para que el usuario:
+- Seleccione/deseleccione APIs individuales
+- Edite el nombre propuesto
+- Asigne proyecto y estado
+- Revise los endpoints detectados
+
+#### 4.3.4 Endpoints del Servidor
+
+| Método | Ruta | Descripción |
+|--------|------|-------------|
+| `POST` | `/api/inventory/discover/history` | Descubrir desde historial del cliente |
+| `POST` | `/api/inventory/discover/swagger` | Explorar Swagger/OpenAPI en URL |
+| `POST` | `/api/inventory/discover/crawl` | Crawlear aplicación web |
+| `POST` | `/api/inventory/discover/probe` | Sondear endpoints comunes |
+| `POST` | `/api/inventory/discover/import` | Importar APIs descubiertas al inventario |
+
+#### 4.3.5 Respuesta del Descubrimiento
+
+```json
+{
+  "discovered": [
+    {
+      "name": "Users API",
+      "base_url": "https://api.example.com",
+      "endpoints": [
+        { "method": "GET", "path": "/v1/users", "description": "List users" },
+        { "method": "POST", "path": "/v1/users", "description": "Create user" }
+      ],
+      "source": "swagger",
+      "confidence": "high"
+    }
+  ]
+}
+```
+
+#### 4.3.6 Seguridad y Límites
+
+- **Timeout máximo**: 30 segundos por exploración
+- **Profundidad máxima de crawl**: 5 niveles
+- **Rate limiting**: 1 request por segundo al explorar
+- **Solo métodos safe**: GET/HEAD para probing (nunca POST/PUT/DELETE)
+- **No envía credenciales** a endpoints descubiertos
+- **Advertencia al usuario** antes de explorar URLs externas
+
+### 4.4 Detalle de API (`ApiDetailView`)
 
 Vista de detalle con pestañas:
 

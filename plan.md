@@ -8,6 +8,7 @@ El proyecto se implementará en **9 fases** secuenciales, cada una con entregabl
 |------|-------------|--------------|----------------------|
 | 1 | Base de datos + Navegación superior | Ninguna | server/index.js, App.tsx |
 | 2 | Dashboard del Inventario | Fase 1 | InventoryDashboard.tsx |
+| 2B | Descubrimiento de APIs (History, Swagger, Crawler, Probe) | Fase 1, 2 | ApiDiscovery.tsx, server endpoints |
 | 3 | Detalle de API + Endpoints | Fase 2 | ApiDetailView.tsx, ApiEndpoints.tsx |
 | 4 | Sistema de Dependencias | Fase 3 | ApiDependencies.tsx |
 | 5 | Estadísticas + Tracking | Fase 3 | ApiStatistics.tsx, server track endpoint |
@@ -257,6 +258,100 @@ Crear la vista principal del inventario con métricas resumen y tarjetas de APIs
 - [ ] Tarjetas de API con información básica
 - [ ] Filtros funcionales
 - [ ] Modal de creación de API
+- [ ] Botón "Descubrir" visible en el dashboard
+
+---
+
+## Fase 2B: Sistema de Descubrimiento de APIs
+
+### Objetivo
+Implementar el sistema de descubrimiento automático de APIs con múltiples métodos de exploración.
+
+### Archivos a Crear
+- `client/src/components/inventory/ApiDiscovery.tsx` (modal principal)
+- `client/src/components/inventory/DiscoveryHistory.tsx` (método desde historial)
+- `client/src/components/inventory/DiscoverySwagger.tsx` (método Swagger/OpenAPI)
+- `client/src/components/inventory/DiscoveryResults.tsx` (resultados y selección)
+
+### Archivos a Modificar
+- `client/src/App.tsx` (estado del modal de descubrimiento)
+- `client/src/App.css` (estilos del modal)
+- `server/index.js` (endpoints de descubrimiento)
+
+### Tareas
+
+#### 2B.1 Endpoint: Descubrimiento desde Historial
+- `POST /api/inventory/discover/history`
+- Consulta tabla `history` agrupando URLs por dominio
+- Extrae base URL, paths, métodos HTTP
+- Detecta patrones de versionado (/v1/, /v2/, /api/)
+- Retorna lista de APIs candidatas con endpoints detectados
+
+#### 2B.2 Endpoint: Explorador Swagger/OpenAPI
+- `POST /api/inventory/discover/swagger`
+- Recibe URL base
+- Intenta acceder a paths comunes de documentación:
+  - `/swagger.json`, `/swagger/v1/swagger.json`
+  - `/api-docs`, `/openapi.json`, `/openapi.yaml`
+  - `/-/openapi.json`, `/api/swagger.json`
+- Si encuentra documento válido, lo parsea (JSON o YAML)
+- Extrae: nombre, base URL, endpoints con paths, métodos, descripciones
+- Retorna API completa con endpoints documentados
+
+#### 2B.3 Endpoint: Crawling de Aplicación Web
+- `POST /api/inventory/discover/crawl`
+- Recibe URL inicial y profundidad máxima (default: 3)
+- GET request a la URL, analiza respuesta HTML
+- Extrae: links `<a href>`, endpoints en scripts JS, formularios
+- Sigue links internos (mismo dominio) recursivamente
+- Filtra URLs que parezcan APIs (contienen /api/, /v1/, etc.)
+- Retorna mapa de endpoints encontrados
+
+#### 2B.4 Endpoint: Sondeo de Endpoints Comunes
+- `POST /api/inventory/discover/probe`
+- Recibe URL base
+- Prueba paths comunes con HEAD/GET:
+  - Prefijos: `/api/`, `/v1/`, `/v2/`, `/v3/`, `/rest/`
+  - Recursos: `/users`, `/items`, `/products`, `/orders`, `/auth`
+  - Health: `/health`, `/healthz`, `/status`, `/ping`
+- Registra endpoints que respondan (status 200-499)
+- Retorna endpoints activos encontrados
+
+#### 2B.5 Endpoint: Importar Descubrimiento
+- `POST /api/inventory/discover/import`
+- Recibe APIs seleccionadas por el usuario
+- Crea entradas en `api_inventory` y `api_endpoints`
+- Maneja duplicados (skip o merge)
+
+#### 2B.6 Modal de Descubrimiento (Cliente)
+- Selector de método de descubrimiento
+- Formulario dinámico según método seleccionado
+- Indicador de progreso durante exploración
+- Lista de resultados con checkboxes para selección
+- Edición de nombre antes de importar
+- Botón "Importar Seleccionadas"
+
+#### 2B.7 Flujo de Usuario
+
+```
+Dashboard → Click "Descubrir"
+  → Modal: Seleccionar método
+  → Si "History": muestra APIs detectadas del historial
+  → Si "Swagger/Crawl/Probe": ingresa URL, click "Start"
+  → Progreso de exploración
+  → Lista de resultados (checkboxes)
+  → Seleccionar APIs a importar
+  → Confirmar → Creadas en inventario
+```
+
+### Entregables de Fase 2B
+- [ ] Descubrimiento desde historial del cliente
+- [ ] Explorador Swagger/OpenAPI
+- [ ] Crawler de aplicaciones web
+- [ ] Sondeo de endpoints comunes
+- [ ] Modal de descubrimiento con selector de métodos
+- [ ] Lista de resultados con selección e importación
+- [ ] Manejo de errores y timeouts
 
 ---
 
@@ -689,6 +784,7 @@ apiClient/
 |------|-------------|--------------------------|
 | 1 | Media | ~300 (server) + ~100 (client) |
 | 2 | Baja | ~200 |
+| 2B | Alta | ~400 (server) + ~350 (client) |
 | 3 | Media | ~400 |
 | 4 | Alta | ~350 (incluye SVG) |
 | 5 | Media | ~250 + ~100 (server) |
@@ -696,7 +792,7 @@ apiClient/
 | 7 | Media | ~200 |
 | 8 | Alta | ~500 + ~200 (server) |
 | 9 | Media | ~300 |
-| **Total** | | **~2,850 líneas** |
+| **Total** | | **~3,600 líneas** |
 
 ---
 
@@ -712,6 +808,17 @@ apiClient/
 - [ ] Las tarjetas muestran información de cada API
 - [ ] Los filtros funcionan correctamente
 - [ ] Se puede crear una nueva API
+- [ ] El botón "Descubrir" está visible en el dashboard
+
+### Fase 2B
+- [ ] El modal de descubrimiento muestra los 4 métodos disponibles
+- [ ] Descubrimiento desde historial retorna APIs agrupadas por dominio
+- [ ] Explorador Swagger encuentra y parsea documentos OpenAPI
+- [ ] Crawler sigue links internos y extrae endpoints
+- [ ] Sondeo prueba paths comunes y retorna los activos
+- [ ] Se pueden seleccionar APIs descubiertas para importar
+- [ ] La importación crea APIs y endpoints en el inventario
+- [ ] Se muestran errores y timeouts correctamente
 
 ### Fase 3
 - [ ] La vista de detalle muestra toda la información de una API
