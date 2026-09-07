@@ -1227,18 +1227,29 @@ function App() {
               const sortedByAge = [...tabs]
                 .map((t, i) => ({ t, i }))
                 .sort((a, b) => b.t.createdAt - a.t.createdAt);
-              const recencyMap = new Map<number, number>();
-              const levels = [1.0, 0.88, 0.72, 0.56, 0.42];
+              const recencyMap = new Map<number, { opacity: number; textColor: string; bold: boolean; accent: boolean }>();
+              const levels = [
+                { opacity: 1.0, textColor: '#fff', bold: true, accent: true },
+                { opacity: 0.95, textColor: '#ddd', bold: true, accent: true },
+                { opacity: 0.85, textColor: '#bbb', bold: false, accent: false },
+                { opacity: 0.70, textColor: '#888', bold: false, accent: false },
+                { opacity: 0.55, textColor: '#666', bold: false, accent: false },
+              ];
               sortedByAge.forEach(({ t, i }, rank) => {
                 recencyMap.set(i, levels[Math.min(rank, levels.length - 1)]);
               });
               return tabs.map((tab, index) => {
-                const opacity = recencyMap.get(index) ?? 1;
+                const r = recencyMap.get(index) ?? levels[4];
                 return (
                   <div
                     key={tab.id}
                     className={`tab-item ${index === activeTabIndex ? 'active' : ''}`}
-                    style={{ '--tab-opacity': opacity } as any}
+                    style={{
+                      '--tab-opacity': r.opacity,
+                      '--tab-text-color': r.textColor,
+                      '--tab-font-weight': r.bold ? '600' : '400',
+                      '--tab-border-left': r.accent ? '3px solid var(--accent-blue)' : '3px solid transparent',
+                    } as any}
                     onClick={() => switchTab(index)}
                   >
                     <span className={`method-tag ${tab.method}`}>{tab.method}</span>

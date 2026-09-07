@@ -838,15 +838,18 @@ body {
   padding: 0.5rem 0.8rem;
   background: var(--bg-dark);
   border: 1px solid var(--border-color);
+  border-left: var(--tab-border-left, 3px solid transparent);
   border-bottom: none;
   border-radius: 8px 8px 0 0;
   cursor: pointer;
   white-space: nowrap;
   min-width: 0;
   max-width: 200px;
-  transition: background 0.15s ease, opacity 0.3s ease;
+  transition: background 0.15s ease, opacity 0.3s ease, color 0.3s ease;
   user-select: none;
   opacity: var(--tab-opacity, 1);
+  color: var(--tab-text-color, #e0e0e0);
+  font-weight: var(--tab-font-weight, 400);
 }
 
 .tab-item:hover {
@@ -856,7 +859,10 @@ body {
 .tab-item.active {
   background: var(--bg-header);
   border-bottom: 2px solid var(--accent-blue);
+  border-left: 3px solid var(--accent-blue) !important;
   opacity: 1;
+  color: #fff;
+  font-weight: 600;
 }
 
 .tab-item .method-tag {
