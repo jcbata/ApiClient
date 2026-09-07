@@ -85,6 +85,268 @@ const db = new sqlite3.Database(dbPath, (err) => {
   }
 });
 
+// Inventory tables
+db.run(`CREATE TABLE IF NOT EXISTS api_inventory (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  description TEXT,
+  base_url TEXT,
+  auth_type TEXT DEFAULT 'none',
+  status TEXT DEFAULT 'active',
+  project TEXT DEFAULT 'Default',
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+)`);
+
+db.run(`CREATE TABLE IF NOT EXISTS api_endpoints (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  api_id INTEGER NOT NULL,
+  name TEXT,
+  method TEXT NOT NULL,
+  path TEXT NOT NULL,
+  description TEXT,
+  request_example TEXT,
+  response_example TEXT,
+  error_codes TEXT,
+  notes TEXT,
+  sort_order INTEGER DEFAULT 0,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (api_id) REFERENCES api_inventory(id) ON DELETE CASCADE
+)`);
+
+db.run(`CREATE TABLE IF NOT EXISTS api_dependencies (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  source_api_id INTEGER NOT NULL,
+  target_api_id INTEGER NOT NULL,
+  dependency_type TEXT NOT NULL,
+  description TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (source_api_id) REFERENCES api_inventory(id) ON DELETE CASCADE,
+  FOREIGN KEY (target_api_id) REFERENCES api_inventory(id) ON DELETE CASCADE
+)`);
+
+db.run(`CREATE TABLE IF NOT EXISTS api_statistics (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  api_id INTEGER NOT NULL,
+  endpoint_id INTEGER,
+  call_count INTEGER DEFAULT 0,
+  success_count INTEGER DEFAULT 0,
+  error_count INTEGER DEFAULT 0,
+  avg_response_time REAL DEFAULT 0,
+  min_response_time REAL DEFAULT 999999,
+  max_response_time REAL DEFAULT 0,
+  last_called_at DATETIME,
+  last_status INTEGER,
+  last_response_time REAL,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (api_id) REFERENCES api_inventory(id) ON DELETE CASCADE,
+  FOREIGN KEY (endpoint_id) REFERENCES api_endpoints(id) ON DELETE CASCADE
+)`);
+
+db.run(`CREATE TABLE IF NOT EXISTS api_activity_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  api_id INTEGER NOT NULL,
+  endpoint_id INTEGER,
+  action TEXT NOT NULL,
+  status INTEGER,
+  response_time REAL,
+  details TEXT,
+  timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (api_id) REFERENCES api_inventory(id) ON DELETE CASCADE
+)`);
+
+db.run(`CREATE TABLE IF NOT EXISTS load_test_results (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  api_id INTEGER NOT NULL,
+  endpoint_id INTEGER,
+  url TEXT NOT NULL,
+  method TEXT NOT NULL,
+  concurrency INTEGER NOT NULL,
+  total_requests INTEGER NOT NULL,
+  successful_requests INTEGER DEFAULT 0,
+  failed_requests INTEGER DEFAULT 0,
+  avg_response_time REAL,
+  min_response_time REAL,
+  max_response_time REAL,
+  p50_response_time REAL,
+  p90_response_time REAL,
+  p95_response_time REAL,
+  p99_response_time REAL,
+  requests_per_second REAL,
+  duration_seconds REAL,
+  results_json TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (api_id) REFERENCES api_inventory(id) ON DELETE CASCADE
+)`);
+
+// Add inventory columns to saved_requests
+db.run(`ALTER TABLE saved_requests ADD COLUMN api_id INTEGER`, () => {});
+db.run(`ALTER TABLE saved_requests ADD COLUMN endpoint_id INTEGER`, () => {});
+
+// ========== INVENTORY CRUD ==========
+
+// List APIs
+app.get('/api/inventory', (req, res) => {
+  const { project, status, search } = req.query;
+  let sql = `SELECT i.*,
+    (SELECT COUNT(*) FROM api_endpoints WHERE api_id = i.id) as endpoint_count,
+    (SELECT IFNULL(SUM(call_count), 0) FROM api_statistics WHERE api_id = i.id) as total_calls,
+    (SELECT IFNULL(avg_response_time, 0) FROM api_statistics WHERE api_id = i.id) as avg_response_time
+    FROM api_inventory i WHERE 1=1`;
+  const params = [];
+  if (project) { sql += ` AND i.project = ?`; params.push(project); }
+  if (status) { sql += ` AND i.status = ?`; params.push(status); }
+  if (search) { sql += ` AND i.name LIKE ?`; params.push(`%${search}%`); }
+  sql += ` ORDER BY i.updated_at DESC`;
+  db.all(sql, params, (err, rows) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json(rows);
+  });
+});
+
+// Stats overview
+app.get('/api/inventory/stats/overview', (req, res) => {
+  db.get(`SELECT
+    COUNT(*) as total_apis,
+    SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) as active_apis,
+    SUM(CASE WHEN status = 'inactive' THEN 1 ELSE 0 END) as inactive_apis,
+    (SELECT COUNT(*) FROM api_endpoints) as total_endpoints
+  FROM api_inventory`, [], (err, row) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json(row);
+  });
+});
+
+// Create API
+app.post('/api/inventory', (req, res) => {
+  const { name, description, base_url, auth_type, status, project } = req.body;
+  if (!name) return res.status(400).json({ error: 'Name is required' });
+  db.run(
+    `INSERT INTO api_inventory (name, description, base_url, auth_type, status, project) VALUES (?, ?, ?, ?, ?, ?)`,
+    [name, description || '', base_url || '', auth_type || 'none', status || 'active', project || 'Default'],
+    function(err) {
+      if (err) return res.status(500).json({ error: err.message });
+      res.json({ id: this.lastID, message: 'API created' });
+    }
+  );
+});
+
+// Get single API
+app.get('/api/inventory/:id', (req, res) => {
+  db.get(`SELECT * FROM api_inventory WHERE id = ?`, [req.params.id], (err, row) => {
+    if (err) return res.status(500).json({ error: err.message });
+    if (!row) return res.status(404).json({ error: 'API not found' });
+    res.json(row);
+  });
+});
+
+// Update API
+app.put('/api/inventory/:id', (req, res) => {
+  const { name, description, base_url, auth_type, status, project } = req.body;
+  db.run(
+    `UPDATE api_inventory SET name=?, description=?, base_url=?, auth_type=?, status=?, project=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`,
+    [name, description || '', base_url || '', auth_type || 'none', status || 'active', project || 'Default', req.params.id],
+    function(err) {
+      if (err) return res.status(500).json({ error: err.message });
+      if (this.changes === 0) return res.status(404).json({ error: 'API not found' });
+      res.json({ message: 'API updated' });
+    }
+  );
+});
+
+// Delete API
+app.delete('/api/inventory/:id', (req, res) => {
+  db.run(`DELETE FROM api_inventory WHERE id = ?`, [req.params.id], function(err) {
+    if (err) return res.status(500).json({ error: err.message });
+    if (this.changes === 0) return res.status(404).json({ error: 'API not found' });
+    res.json({ message: 'API deleted' });
+  });
+});
+
+// ========== ENDPOINTS CRUD ==========
+
+// List endpoints for an API
+app.get('/api/inventory/:id/endpoints', (req, res) => {
+  db.all(`SELECT * FROM api_endpoints WHERE api_id = ? ORDER BY sort_order ASC`, [req.params.id], (err, rows) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json(rows);
+  });
+});
+
+// Create endpoint
+app.post('/api/inventory/:id/endpoints', (req, res) => {
+  const { name, method, path, description, request_example, response_example, error_codes, notes } = req.body;
+  if (!method || !path) return res.status(400).json({ error: 'method and path are required' });
+  db.run(
+    `INSERT INTO api_endpoints (api_id, name, method, path, description, request_example, response_example, error_codes, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [req.params.id, name || '', method, path, description || '', request_example || '', response_example || '', error_codes || '', notes || ''],
+    function(err) {
+      if (err) return res.status(500).json({ error: err.message });
+      res.json({ id: this.lastID, message: 'Endpoint created' });
+    }
+  );
+});
+
+// Update endpoint
+app.put('/api/inventory/endpoints/:id', (req, res) => {
+  const { name, method, path, description, request_example, response_example, error_codes, notes } = req.body;
+  db.run(
+    `UPDATE api_endpoints SET name=?, method=?, path=?, description=?, request_example=?, response_example=?, error_codes=?, notes=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`,
+    [name || '', method, path, description || '', request_example || '', response_example || '', error_codes || '', notes || '', req.params.id],
+    function(err) {
+      if (err) return res.status(500).json({ error: err.message });
+      if (this.changes === 0) return res.status(404).json({ error: 'Endpoint not found' });
+      res.json({ message: 'Endpoint updated' });
+    }
+  );
+});
+
+// Delete endpoint
+app.delete('/api/inventory/endpoints/:id', (req, res) => {
+  db.run(`DELETE FROM api_endpoints WHERE id = ?`, [req.params.id], function(err) {
+    if (err) return res.status(500).json({ error: err.message });
+    if (this.changes === 0) return res.status(404).json({ error: 'Endpoint not found' });
+    res.json({ message: 'Endpoint deleted' });
+  });
+});
+
+// ========== DEPENDENCIES CRUD ==========
+
+app.get('/api/inventory/dependencies', (req, res) => {
+  const { api_id } = req.query;
+  let sql = `SELECT d.*, s.name as source_name, t.name as target_name
+    FROM api_dependencies d
+    JOIN api_inventory s ON d.source_api_id = s.id
+    JOIN api_inventory t ON d.target_api_id = t.id`;
+  const params = [];
+  if (api_id) { sql += ` WHERE d.source_api_id = ? OR d.target_api_id = ?`; params.push(api_id, api_id); }
+  db.all(sql, params, (err, rows) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json(rows);
+  });
+});
+
+app.post('/api/inventory/dependencies', (req, res) => {
+  const { source_api_id, target_api_id, dependency_type, description } = req.body;
+  if (!source_api_id || !target_api_id || !dependency_type) return res.status(400).json({ error: 'source_api_id, target_api_id, and dependency_type are required' });
+  db.run(
+    `INSERT INTO api_dependencies (source_api_id, target_api_id, dependency_type, description) VALUES (?, ?, ?, ?)`,
+    [source_api_id, target_api_id, dependency_type, description || ''],
+    function(err) {
+      if (err) return res.status(500).json({ error: err.message });
+      res.json({ id: this.lastID, message: 'Dependency created' });
+    }
+  );
+});
+
+app.delete('/api/inventory/dependencies/:id', (req, res) => {
+  db.run(`DELETE FROM api_dependencies WHERE id = ?`, [req.params.id], function(err) {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json({ message: 'Dependency deleted' });
+  });
+});
+
 // Proxy endpoint to execute requests
 app.post('/api/execute', async (req, res) => {
   const { method, url, headers, data, multipartData, auth, ignoreSSL } = req.body;

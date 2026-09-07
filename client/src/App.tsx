@@ -140,6 +140,14 @@ function App() {
   const [expandedFolders, setExpandedFolders] = useState<Record<number, boolean>>({});
   const [isSending, setIsSending] = useState(false);
   const [importModal, setImportModal] = useState<{ show: boolean, items: any[], conflicts: any[], folderTree?: any[] }>({ show: false, items: [], conflicts: [] });
+  const [appMode, setAppMode] = useState<'client' | 'inventory' | 'loadtest'>('client');
+
+  // Inventory state
+  const [inventoryApis, setInventoryApis] = useState<any[]>([]);
+  const [inventoryStats, setInventoryStats] = useState({ total_apis: 0, active_apis: 0, inactive_apis: 0, total_endpoints: 0 });
+  const [inventoryFilter, setInventoryFilter] = useState({ project: '', status: '', search: '' });
+  const [showNewApiModal, setShowNewApiModal] = useState(false);
+  const [newApiForm, setNewApiForm] = useState({ name: '', description: '', base_url: '', auth_type: 'none', status: 'active', project: 'Default' });
 
   const isResizing = useRef(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -359,6 +367,68 @@ function App() {
       console.error('Failed to fetch folders');
     }
   };
+
+  const fetchInventoryApis = async () => {
+    try {
+      const params = new URLSearchParams();
+      if (inventoryFilter.project) params.append('project', inventoryFilter.project);
+      if (inventoryFilter.status) params.append('status', inventoryFilter.status);
+      if (inventoryFilter.search) params.append('search', inventoryFilter.search);
+      const res = await fetch(`/api/inventory?${params.toString()}`);
+      const data = await res.json();
+      setInventoryApis(data);
+    } catch (e) {
+      console.error('Failed to fetch inventory APIs');
+    }
+  };
+
+  const fetchInventoryStats = async () => {
+    try {
+      const res = await fetch('/api/inventory/stats/overview');
+      const data = await res.json();
+      setInventoryStats(data);
+    } catch (e) {
+      console.error('Failed to fetch inventory stats');
+    }
+  };
+
+  const handleCreateApi = async () => {
+    if (!newApiForm.name) { showToast('Name is required', 'error'); return; }
+    try {
+      const res = await fetch('/api/inventory', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newApiForm),
+      });
+      if (!res.ok) throw new Error('Failed to create API');
+      setShowNewApiModal(false);
+      setNewApiForm({ name: '', description: '', base_url: '', auth_type: 'none', status: 'active', project: 'Default' });
+      fetchInventoryApis();
+      fetchInventoryStats();
+      showToast('API created');
+    } catch (e: any) {
+      showToast(e.message, 'error');
+    }
+  };
+
+  const handleDeleteApi = async (id: number) => {
+    if (!confirm('Delete this API and all its endpoints?')) return;
+    try {
+      await fetch(`/api/inventory/${id}`, { method: 'DELETE' });
+      fetchInventoryApis();
+      fetchInventoryStats();
+      showToast('API deleted');
+    } catch (e: any) {
+      showToast(e.message, 'error');
+    }
+  };
+
+  useEffect(() => {
+    if (appMode === 'inventory') {
+      fetchInventoryApis();
+      fetchInventoryStats();
+    }
+  }, [appMode, inventoryFilter]);
 
   const handleLoadRequest = (item: any, isSaved?: boolean) => {
     if (isSaved && item.id) {
@@ -1077,6 +1147,14 @@ function App() {
   }, {} as Record<string, any[]>);
 
   return (
+    <div className="app-root">
+      <nav className="app-nav">
+        <button className={appMode === 'client' ? 'active' : ''} onClick={() => setAppMode('client')}>API Client</button>
+        <button className={appMode === 'inventory' ? 'active' : ''} onClick={() => setAppMode('inventory')}>API Inventory</button>
+        <button className={appMode === 'loadtest' ? 'active' : ''} onClick={() => setAppMode('loadtest')}>Load Testing</button>
+      </nav>
+
+      {appMode === 'client' && (
     <div className={`app-container ${sidebarOpen ? 'sidebar-open' : 'sidebar-closed'}`} style={{ '--sidebar-width': `${sidebarWidth}px` } as any}>
       {toast && (
         <div className={`toast ${toast.type}`}>
@@ -1484,6 +1562,104 @@ function App() {
               </button>
             </div>
           </div>
+        </div>
+      )}
+    </div>
+      )}
+
+      {appMode === 'inventory' && (
+        <div className="inventory-view">
+          <div className="inventory-header">
+            <h2>API Inventory</h2>
+            <button className="send-button" onClick={() => setShowNewApiModal(true)}>+ New API</button>
+          </div>
+
+          <div className="inventory-filters">
+            <input
+              placeholder="Search APIs..."
+              value={inventoryFilter.search}
+              onChange={(e) => setInventoryFilter({ ...inventoryFilter, search: e.target.value })}
+            />
+            <select value={inventoryFilter.status} onChange={(e) => setInventoryFilter({ ...inventoryFilter, status: e.target.value })}>
+              <option value="">All Status</option>
+              <option value="active">Active</option>
+              <option value="inactive">Inactive</option>
+              <option value="deprecated">Deprecated</option>
+            </select>
+          </div>
+
+          <div className="inventory-stats">
+            <div className="stat-card"><span className="stat-value">{inventoryStats.total_apis}</span><span className="stat-label">Total APIs</span></div>
+            <div className="stat-card"><span className="stat-value" style={{color: '#4caf50'}}>{inventoryStats.active_apis}</span><span className="stat-label">Active</span></div>
+            <div className="stat-card"><span className="stat-value" style={{color: '#ff9800'}}>{inventoryStats.inactive_apis}</span><span className="stat-label">Inactive</span></div>
+            <div className="stat-card"><span className="stat-value" style={{color: '#007acc'}}>{inventoryStats.total_endpoints}</span><span className="stat-label">Endpoints</span></div>
+          </div>
+
+          <div className="inventory-grid">
+            {inventoryApis.length === 0 && <p style={{color: '#666', gridColumn: '1/-1'}}>No APIs found. Create one to get started.</p>}
+            {inventoryApis.map((api) => (
+              <div key={api.id} className="api-card">
+                <div className="api-card-header">
+                  <span className={`status-dot ${api.status}`}></span>
+                  <strong>{api.name}</strong>
+                  <button className="delete-item-btn" onClick={() => handleDeleteApi(api.id)}>{'\u00D7'}</button>
+                </div>
+                <div className="api-card-body">
+                  {api.base_url && <div className="api-card-url">{api.base_url}</div>}
+                  <div className="api-card-meta">
+                    <span>{api.endpoint_count || 0} endpoints</span>
+                    <span>{api.total_calls || 0} calls</span>
+                    {api.avg_response_time > 0 && <span>{Math.round(api.avg_response_time)}ms avg</span>}
+                  </div>
+                  {api.description && <div className="api-card-desc">{api.description}</div>}
+                </div>
+                <div className="api-card-footer">
+                  <span className={`api-status-badge ${api.status}`}>{api.status}</span>
+                  <span className="api-project-badge">{api.project}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {showNewApiModal && (
+            <div className="import-modal-overlay">
+              <div className="import-modal">
+                <h3>Create New API</h3>
+                <div className="modal-form">
+                  <input placeholder="API Name *" value={newApiForm.name} onChange={(e) => setNewApiForm({ ...newApiForm, name: e.target.value })} />
+                  <input placeholder="Base URL (e.g. https://api.example.com)" value={newApiForm.base_url} onChange={(e) => setNewApiForm({ ...newApiForm, base_url: e.target.value })} />
+                  <textarea placeholder="Description" rows={3} value={newApiForm.description} onChange={(e) => setNewApiForm({ ...newApiForm, description: e.target.value })} />
+                  <div style={{display: 'flex', gap: '0.5rem'}}>
+                    <select value={newApiForm.status} onChange={(e) => setNewApiForm({ ...newApiForm, status: e.target.value })}>
+                      <option value="active">Active</option>
+                      <option value="inactive">Inactive</option>
+                      <option value="deprecated">Deprecated</option>
+                    </select>
+                    <select value={newApiForm.auth_type} onChange={(e) => setNewApiForm({ ...newApiForm, auth_type: e.target.value })}>
+                      <option value="none">No Auth</option>
+                      <option value="bearer">Bearer Token</option>
+                      <option value="basic">Basic Auth</option>
+                      <option value="apikey">API Key</option>
+                    </select>
+                    <input placeholder="Project" value={newApiForm.project} onChange={(e) => setNewApiForm({ ...newApiForm, project: e.target.value })} />
+                  </div>
+                </div>
+                <div className="import-modal-actions">
+                  <button className="send-button" onClick={handleCreateApi}>Create API</button>
+                  <button className="send-button" style={{background: 'transparent', border: '1px solid #444'}} onClick={() => setShowNewApiModal(false)}>Cancel</button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {appMode === 'loadtest' && (
+        <div className="inventory-view">
+          <div className="inventory-header">
+            <h2>Load Testing</h2>
+          </div>
+          <p style={{color: '#666', padding: '2rem'}}>Coming soon...</p>
         </div>
       )}
     </div>

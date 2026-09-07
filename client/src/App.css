@@ -976,3 +976,237 @@ body {
   text-transform: uppercase;
   flex-shrink: 0;
 }
+
+/* ========== APP ROOT & NAVIGATION ========== */
+.app-root {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
+}
+
+.app-nav {
+  display: flex;
+  background: var(--bg-sidebar);
+  border-bottom: 1px solid var(--border-color);
+  padding: 0;
+  flex-shrink: 0;
+  z-index: 10;
+}
+
+.app-nav button {
+  flex: 1;
+  padding: 0.7rem 1.5rem;
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 0.9rem;
+  border-bottom: 2px solid transparent;
+  transition: all 0.2s;
+}
+
+.app-nav button:hover {
+  color: var(--text-main);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.app-nav button.active {
+  color: var(--accent-blue);
+  border-bottom-color: var(--accent-blue);
+}
+
+.app-root > .app-container {
+  flex: 1;
+  min-height: 0;
+}
+
+/* ========== INVENTORY VIEW ========== */
+.inventory-view {
+  flex: 1;
+  padding: 1.5rem 2rem;
+  overflow-y: auto;
+  background: var(--bg-dark);
+}
+
+.inventory-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1.5rem;
+}
+
+.inventory-header h2 {
+  margin: 0;
+  color: var(--text-main);
+}
+
+.inventory-filters {
+  display: flex;
+  gap: 0.75rem;
+  margin-bottom: 1.5rem;
+}
+
+.inventory-filters input,
+.inventory-filters select {
+  padding: 0.5rem 0.8rem;
+  background: var(--bg-header);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  color: var(--text-main);
+  font-size: 0.85rem;
+}
+
+.inventory-filters input {
+  flex: 1;
+  min-width: 200px;
+}
+
+.inventory-stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+.stat-card {
+  background: var(--bg-header);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 1.2rem;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.stat-value {
+  font-size: 1.8rem;
+  font-weight: 700;
+  color: var(--text-main);
+}
+
+.stat-label {
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  text-transform: uppercase;
+}
+
+.inventory-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 1rem;
+}
+
+.api-card {
+  background: var(--bg-header);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 1rem;
+  transition: border-color 0.2s;
+}
+
+.api-card:hover {
+  border-color: var(--accent-blue);
+}
+
+.api-card-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.api-card-header strong {
+  flex: 1;
+  font-size: 1rem;
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.status-dot.active { background: #4caf50; }
+.status-dot.inactive { background: #ff9800; }
+.status-dot.deprecated { background: #f44336; }
+
+.api-card-body {
+  margin-bottom: 0.75rem;
+}
+
+.api-card-url {
+  font-family: monospace;
+  font-size: 0.8rem;
+  color: var(--accent-blue);
+  margin-bottom: 0.5rem;
+  word-break: break-all;
+}
+
+.api-card-meta {
+  display: flex;
+  gap: 1rem;
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  margin-bottom: 0.5rem;
+}
+
+.api-card-desc {
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  line-height: 1.4;
+}
+
+.api-card-footer {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.api-status-badge,
+.api-project-badge {
+  font-size: 0.7rem;
+  padding: 0.15rem 0.5rem;
+  border-radius: 3px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.api-status-badge {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-dim);
+}
+
+.api-status-badge.active { background: rgba(76, 175, 80, 0.2); color: #4caf50; }
+.api-status-badge.inactive { background: rgba(255, 152, 0, 0.2); color: #ff9800; }
+.api-status-badge.deprecated { background: rgba(244, 67, 54, 0.2); color: #f44336; }
+
+.api-project-badge {
+  background: rgba(0, 122, 204, 0.15);
+  color: var(--accent-blue);
+}
+
+.modal-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.modal-form input,
+.modal-form textarea,
+.modal-form select {
+  padding: 0.5rem 0.8rem;
+  background: var(--bg-dark);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  color: var(--text-main);
+  font-size: 0.85rem;
+  font-family: inherit;
+}
+
+.modal-form textarea {
+  resize: vertical;
+}
