@@ -262,96 +262,158 @@ Crear la vista principal del inventario con métricas resumen y tarjetas de APIs
 
 ---
 
-## Fase 2B: Sistema de Descubrimiento de APIs
+## Fase 2B: Sistema de Ambientes + Descubrimiento de APIs
 
 ### Objetivo
-Implementar el sistema de descubrimiento automático de APIs con múltiples métodos de exploración.
+Implementar el sistema de ambientes (Dev/QA/Prod) con agrupación por host, y el descubrimiento automático de APIs con importación interactiva.
 
 ### Archivos a Crear
 - `client/src/components/inventory/ApiDiscovery.tsx` (modal principal)
 - `client/src/components/inventory/DiscoveryHistory.tsx` (método desde historial)
 - `client/src/components/inventory/DiscoverySwagger.tsx` (método Swagger/OpenAPI)
-- `client/src/components/inventory/DiscoveryResults.tsx` (resultados y selección)
+- `client/src/components/inventory/DiscoveryResults.tsx` (resultados, selección y ambientes)
 
 ### Archivos a Modificar
-- `client/src/App.tsx` (estado del modal de descubrimiento)
-- `client/src/App.css` (estilos del modal)
-- `server/index.js` (endpoints de descubrimiento)
+- `client/src/App.tsx` (estado de ambientes y descubrimiento)
+- `client/src/App.css` (estilos de ambientes y modal)
+- `server/index.js` (endpoints de ambientes y descubrimiento)
 
 ### Tareas
 
-#### 2B.1 Endpoint: Descubrimiento desde Historial
+#### 2B.1 Tabla environments en SQLite
+```sql
+CREATE TABLE IF NOT EXISTS environments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  type TEXT NOT NULL DEFAULT 'development',
+  base_url TEXT,
+  host TEXT,
+  project TEXT DEFAULT 'Default',
+  description TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+#### 2B.2 Columna environment_id en api_inventory
+```sql
+ALTER TABLE api_inventory ADD COLUMN environment_id INTEGER;
+ALTER TABLE api_inventory ADD COLUMN detected_schema TEXT DEFAULT 'unknown';
+```
+
+#### 2B.3 Detección Automática de Ambiente
+- Función server: `detectEnvironment(url)` retorna { type, host }
+- Patrones de detección:
+  - `localhost`, `127.0.0.1`, `*.local`, `*.dev` → development
+  - `*.qa.*`, `*.staging.*`, `qa-*`, `staging-*` → qa
+  - Cualquier otro → production
+- Retorna host extraído (dominio + puerto)
+
+#### 2B.4 CRUD de Ambientes (Server)
+- `GET /api/environments` — Listar (filtro por project)
+- `POST /api/environments` — Crear
+- `PUT /api/environments/:id` — Actualizar
+- `DELETE /api/environments/:id` — Eliminar
+- `GET /api/environments/hosts` — Listar hosts únicos con su ambiente detectado
+
+#### 2B.5 Filtro de Ambiente en Dashboard (Cliente)
+- Selector de ambiente en la barra de filtros (All / Dev / QA / Prod)
+- Agrupación visual de APIs por host/ambiente
+- Badge de ambiente en cada API card (color: azul=naranja=verde)
+- Al cambiar filtro, se filtra la lista de APIs
+
+#### 2B.6 Endpoint: Descubrimiento desde Historial
 - `POST /api/inventory/discover/history`
-- Consulta tabla `history` agrupando URLs por dominio
-- Extrae base URL, paths, métodos HTTP
-- Detecta patrones de versionado (/v1/, /v2/, /api/)
-- Retorna lista de APIs candidatas con endpoints detectados
+- Consulta tabla `history`, agrupa URLs por host
+- Para cada host, detecta ambiente automáticamente
+- Retorna APIs agrupadas por host con ambiente asignado
 
-#### 2B.2 Endpoint: Explorador Swagger/OpenAPI
+#### 2B.7 Endpoint: Explorador Swagger/OpenAPI
 - `POST /api/inventory/discover/swagger`
-- Recibe URL base
-- Intenta acceder a paths comunes de documentación:
-  - `/swagger.json`, `/swagger/v1/swagger.json`
-  - `/api-docs`, `/openapi.json`, `/openapi.yaml`
-  - `/-/openapi.json`, `/api/swagger.json`
-- Si encuentra documento válido, lo parsea (JSON o YAML)
-- Extrae: nombre, base URL, endpoints con paths, métodos, descripciones
-- Retorna API completa con endpoints documentados
+- Recibe URL base, intenta documentos OpenAPI
+- Parsea y extrae endpoints
+- Detecta ambiente del host
 
-#### 2B.3 Endpoint: Crawling de Aplicación Web
+#### 2B.8 Endpoint: Crawling de Aplicación Web
 - `POST /api/inventory/discover/crawl`
-- Recibe URL inicial y profundidad máxima (default: 3)
-- GET request a la URL, analiza respuesta HTML
-- Extrae: links `<a href>`, endpoints en scripts JS, formularios
-- Sigue links internos (mismo dominio) recursivamente
-- Filtra URLs que parezcan APIs (contienen /api/, /v1/, etc.)
-- Retorna mapa de endpoints encontrados
+- Recibe URL y profundidad (max 5)
+- Sigue links internos, extrae endpoints API
+- Detecta ambiente del host
 
-#### 2B.4 Endpoint: Sondeo de Endpoints Comunes
+#### 2B.9 Endpoint: Sondeo de Endpoints
 - `POST /api/inventory/discover/probe`
-- Recibe URL base
-- Prueba paths comunes con HEAD/GET:
-  - Prefijos: `/api/`, `/v1/`, `/v2/`, `/v3/`, `/rest/`
-  - Recursos: `/users`, `/items`, `/products`, `/orders`, `/auth`
-  - Health: `/health`, `/healthz`, `/status`, `/ping`
-- Registra endpoints que respondan (status 200-499)
-- Retorna endpoints activos encontrados
+- Recibe URL base, prueba paths comunes
+- Retorna endpoints activos
+- Detecta ambiente del host
 
-#### 2B.5 Endpoint: Importar Descubrimiento
+#### 2B.10 Importación Interactiva con Ambientes
 - `POST /api/inventory/discover/import`
-- Recibe APIs seleccionadas por el usuario
-- Crea entradas en `api_inventory` y `api_endpoints`
-- Maneja duplicados (skip o merge)
+- Recibe APIs seleccionadas + información de ambientes
+- Para cada host nuevo:
+  1. Verificar si ya existe ambiente con ese host
+  2. Si no existe, crear con datos proporcionados por el usuario
+- Crear APIs en `api_inventory` con `environment_id` y `detected_schema`
+- Crear endpoints en `api_endpoints`
 
-#### 2B.6 Modal de Descubrimiento (Cliente)
-- Selector de método de descubrimiento
-- Formulario dinámico según método seleccionado
-- Indicador de progreso durante exploración
-- Lista de resultados con checkboxes para selección
-- Edición de nombre antes de importar
-- Botón "Importar Seleccionadas"
+#### 2B.11 Modal de Descubrimiento (Cliente)
+- Paso 1: Selector de método (History, Swagger, Crawler, Probe)
+- Paso 2: Formulario dinámico según método
+- Paso 3: Resultados con:
+  - Agrupación por host
+  - Selector de ambiente por host (existente o "New...")
+  - Checkboxes para selección de APIs
+  - Badge de esquema detectado
+- Paso 4: Si hay hosts nuevos → modal de creación de ambiente
+- Paso 5: Confirmación e importación
 
-#### 2B.7 Flujo de Usuario
+#### 2B.12 Flujo de Usuario
 
 ```
-Dashboard → Click "Descubrir"
-  → Modal: Seleccionar método
-  → Si "History": muestra APIs detectadas del historial
-  → Si "Swagger/Crawl/Probe": ingresa URL, click "Start"
-  → Progreso de exploración
-  → Lista de resultados (checkboxes)
-  → Seleccionar APIs a importar
-  → Confirmar → Creadas en inventario
+Dashboard
+  │
+  ├─ Filtro de ambiente (All | Dev | QA | Prod)
+  │   └─ Filtra APIs mostradas
+  │
+  └─ Click "Descubrir"
+      │
+      ├─ Seleccionar método
+      │
+      ├─ [If History] → Resultados automáticos
+      │   └─ Muestra APIs agrupadas por host
+      │
+      ├─ [If URL method] → Ingresar URL → Start
+      │   └─ Progreso → Resultados
+      │
+      ├─ Resultados:
+      │   ├─ api.example.com → Environment: [Production ▼]
+      │   ├─ localhost:3000  → Environment: [Development ▼]
+      │   └─ qa.company.com  → Environment: [New... → QA]
+      │
+      ├─ Si host nuevo → Modal:
+      │   "Nuevo ambiente detectado: api.example.com"
+      │   Nombre: [________]
+      │   Tipo: [Production ▼]
+      │   Proyecto: [Default ▼]
+      │   [Crear]
+      │
+      └─ Click "Import Selected"
+          └─ APIs creadas con ambiente y esquema
 ```
 
 ### Entregables de Fase 2B
-- [ ] Descubrimiento desde historial del cliente
+- [ ] Tabla environments creada
+- [ ] Columnas environment_id y detected_schema en api_inventory
+- [ ] CRUD de ambientes
+- [ ] Detección automática de ambiente por URL
+- [ ] Filtro de ambiente en dashboard
+- [ ] Agrupación visual por host
+- [ ] Badge de ambiente en API cards
+- [ ] Descubrimiento desde historial
 - [ ] Explorador Swagger/OpenAPI
 - [ ] Crawler de aplicaciones web
 - [ ] Sondeo de endpoints comunes
-- [ ] Modal de descubrimiento con selector de métodos
-- [ ] Lista de resultados con selección e importación
-- [ ] Manejo de errores y timeouts
+- [ ] Modal de descubrimiento con pasos
+- [ ] Importación interactiva con creación de ambientes
+- [ ] Detección de esquema API (REST, GraphQL, etc.)
 
 ---
 
@@ -811,13 +873,20 @@ apiClient/
 - [ ] El botón "Descubrir" está visible en el dashboard
 
 ### Fase 2B
-- [ ] El modal de descubrimiento muestra los 4 métodos disponibles
-- [ ] Descubrimiento desde historial retorna APIs agrupadas por dominio
+- [ ] La tabla environments existe y tiene datos de ejemplo
+- [ ] El filtro de ambiente cambia las APIs mostradas en el dashboard
+- [ ] Las APIs muestran badge de ambiente con color correcto
+- [ ] Las APIs se agrupan visualmente por host/ambiente
+- [ ] La detección automática de ambiente identifica Dev/QA/Prod correctamente
+- [ ] El modal de descubrimiento muestra los 4 métodos
+- [ ] Descubrimiento desde historial retorna APIs agrupadas por host
 - [ ] Explorador Swagger encuentra y parsea documentos OpenAPI
 - [ ] Crawler sigue links internos y extrae endpoints
 - [ ] Sondeo prueba paths comunes y retorna los activos
-- [ ] Se pueden seleccionar APIs descubiertas para importar
-- [ ] La importación crea APIs y endpoints en el inventario
+- [ ] Los resultados muestran ambiente detectado por host
+- [ ] Se pueden seleccionar APIs para importar
+- [ ] La importación crea ambientes nuevos interactivamente
+- [ ] Las APIs importadas tienen environment_id y detected_schema
 - [ ] Se muestran errores y timeouts correctamente
 
 ### Fase 3

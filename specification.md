@@ -103,13 +103,103 @@ Cada tarjeta muestra:
 - Método y path del endpoint principal
 - Número total de llamadas
 - Tiempo promedio de respuesta
+- Badge de ambiente (Dev, QA, Prod)
 - Botones: Ver, Editar, Abrir en Cliente
 
-### 4.3 Sistema de Descubrimiento de APIs (`ApiDiscovery`)
+### 4.3 Sistema de Ambientes
 
-Modal accesible desde el botón "Descubrir" en el dashboard. Permite encontrar APIs automáticamente mediante diferentes métodos de exploración.
+#### 4.3.1 Concepto
 
-#### 4.3.1 Métodos de Descubrimiento
+Cada API pertenece a un **ambiente** (Development, QA, Production). Los ambientes se detectan automáticamente a partir de las URLs y se pueden gestionar manualmente.
+
+#### 4.3.2 Detección Automática de Ambiente
+
+Al descubrir o crear una API, el sistema analiza la URL base y asigna un ambiente:
+
+| Patrón en URL | Ambiente detectado |
+|---------------|-------------------|
+| `localhost`, `127.0.0.1`, `*.local`, `*.dev`, `*:3000`, `*:8080` | **Development** |
+| `*.qa.*`, `*.staging.*`, `qa-*`, `staging-*`, `*.test.*` | **QA** |
+| Cualquier otro dominio público | **Production** |
+
+#### 4.3.3 Tabla `environments`
+
+```sql
+CREATE TABLE IF NOT EXISTS environments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  type TEXT NOT NULL DEFAULT 'development',  -- development, qa, production
+  base_url TEXT,
+  project TEXT DEFAULT 'Default',
+  description TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+#### 4.3.4 Agrupación por Host
+
+Las APIs se agrupan visualmente por **host/nombre del ambiente** en el dashboard:
+
+```
+┌─────────────────────────────────────────┐
+│ Environment: [All ▼] [Development ▼]    │
+├─────────────────────────────────────────┤
+│ 🖥️ localhost:3000 (Development)         │
+│   ├─ Users API    ● active              │
+│   └─ Orders API   ● active              │
+│                                         │
+│ 🌐 api.company.com (Production)         │
+│   ├─ Payments API ● active              │
+│   └─ Auth API     ● active              │
+│                                         │
+│ 🔧 qa-api.company.com (QA)             │
+│   └─ Users API    ● inactive            │
+└─────────────────────────────────────────┘
+```
+
+#### 4.3.5 Filtros de Ambiente en Dashboard
+
+- **Filtro superior**: Selector de ambiente (All / Development / QA / Production)
+- **Agrupación automática**: APIs del mismo host se muestran juntas
+- **Badge visual**: Cada API card muestra el ambiente con color:
+  - Development → azul
+  - QA → naranja
+  - Production → verde
+
+#### 4.3.6 Interacción con Descubrimiento
+
+Cuando se descubren APIs de un nuevo servidor:
+1. El sistema detecta el host automáticamente
+2. Pregunta: *"Se detectó el host `api.example.com`. ¿Es un ambiente nuevo?"*
+3. Si es nuevo, solicita:
+   - Nombre del ambiente (ej: "Producción Principal")
+   - Tipo (Development / QA / Production)
+   - Proyecto al que pertenece
+4. Se crea el ambiente y se asocian las APIs descubiertas
+
+#### 4.3.7 Esquema de API (API Schema)
+
+Además del ambiente, el descubrimiento detecta el **esquema/formato** del API:
+
+| Señal detectada | Esquema |
+|-----------------|---------|
+| Documento OpenAPI/Swagger válido | **REST (OpenAPI)** |
+| Respuestas JSON con `data`, `results`, `items` | **REST (JSON)** |
+| Endpoint `/graphql` o query `query{}` | **GraphQL** |
+| Content-Type `application/protobuf` o `.proto` | **gRPC** |
+| Headers SOAP o XML body | **SOAP** |
+| No se pudo determinar | **Unknown** |
+
+El esquema se almacena en la API y ayuda a:
+- Generar documentación automática
+- Validar requests en el módulo Load Testing
+- Sugerir formatos de body en el API Client
+
+### 4.4 Sistema de Descubrimiento de APIs (`ApiDiscovery`)
+
+Modal accesible desde el botón "Descubrir" en el dashboard. Permite encontrar APIs automáticamente mediante diferentes métodos de exploración. Integra detección de ambientes y esquema de API.
+
+#### 4.4.1 Métodos de Descubrimiento
 
 ##### Método 1: Desde Historial del Cliente (Básico)
 - **Fuente**: Tabla `history` del módulo API Client
@@ -169,46 +259,74 @@ Modal accesible desde el botón "Descubrir" en el dashboard. Permite encontrar A
 - **Resultado**: Lista de endpoints activos en el dominio
 - **Ventaja**: Encuentra APIs no documentadas, útil para auditorías
 
-#### 4.3.2 Flujo del Modal "Descubrir"
+#### 4.4.2 Flujo del Modal "Descubrir"
 
 ```
-┌─────────────────────────────────────────────────────┐
-│  Discover APIs                                       │
-├─────────────────────────────────────────────────────┤
-│                                                     │
-│  Method: [Select ▼]                                 │
-│    ○ From API Client History                        │
-│    ○ Swagger/OpenAPI Scanner                        │
-│    ○ Web Application Crawler                        │
-│    ○ Common Endpoint Probing                        │
-│                                                     │
-│  ── If History ──                                   │
-│  (shows detected APIs from history automatically)   │
-│                                                     │
-│  ── If Swagger/Crawler/Probing ──                   │
-│  Base URL: [https://api.example.com     ]           │
-│  Depth: [3] (for crawler)                           │
-│                                                     │
-│  [ Start Discovery ]                                │
-│                                                     │
-│  ── Results ──                                      │
-│  ☑ Users API    (12 endpoints)  /v1/users           │
-│  ☑ Orders API   (8 endpoints)   /v1/orders          │
-│  ☐ Auth Service (2 endpoints)   /auth               │
-│                                                     │
-│  [ Import Selected (3) ]  [ Cancel ]                │
-└─────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│  Discover APIs                                               │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  Step 1: Select Method                                      │
+│  ┌─────────────────────────────────────────────────────┐    │
+│  │ ○ From API Client History                            │    │
+│  │ ○ Swagger/OpenAPI Scanner                            │    │
+│  │ ○ Web Application Crawler                            │    │
+│  │ ○ Common Endpoint Probing                            │    │
+│  └─────────────────────────────────────────────────────┘    │
+│                                                             │
+│  Step 2: Configure (if URL-based method)                    │
+│  Base URL: [https://api.example.com              ]          │
+│  Depth: [3] (crawler only)                                  │
+│                                                             │
+│  [ Start Discovery ]                                        │
+│                                                             │
+│  Step 3: Review Results                                     │
+│  ┌─────────────────────────────────────────────────────┐    │
+│  │ 🔍 Discovery Results (15 endpoints found)           │    │
+│  │                                                     │    │
+│  │ Host: api.example.com → Environment: ? [New ▼]      │    │
+│  │ Schema detected: REST (OpenAPI)                     │    │
+│  │                                                     │    │
+│  │ ☑ Users API      (12 endpoints)  REST   /v1/users   │    │
+│  │ ☑ Orders API     (8 endpoints)   REST   /v1/orders  │    │
+│  │ ☐ Auth Service   (2 endpoints)   REST   /auth       │    │
+│  └─────────────────────────────────────────────────────┘    │
+│                                                             │
+│  [ Import Selected (2) ]  [ Cancel ]                        │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-#### 4.3.3 Modal de Confirmación
+#### 4.4.3 Flujo de Importación Interactiva
+
+Al importar APIs descubiertas, el sistema verifica cada host único:
+
+```
+For each unique host in discovery results:
+  1. ¿Existe un ambiente con ese host?
+     ├─ SÍ → Asociar APIs a ese ambiente existente
+     └─ NO → Mostrar modal:
+              "Se detectó el servidor: api.example.com
+               ¿Es un ambiente nuevo?"
+              ├─ SÍ → Solicitar:
+              │   - Nombre del ambiente (*)
+              │   - Tipo: [Development / QA / Production]
+              │   - Proyecto: [Default ▼]
+              │   - Descripción (opcional)
+              │   → Crear ambiente
+              └─ NO → Omitir APIs de ese host
+```
+
+#### 4.4.4 Modal de Confirmación
 
 Antes de importar, muestra los resultados para que el usuario:
 - Seleccione/deseleccione APIs individuales
 - Edite el nombre propuesto
-- Asigne proyecto y estado
+- Asigne ambiente (detectado o nuevo)
+- Asigne proyecto
 - Revise los endpoints detectados
+- Confirme el esquema detectado (REST, GraphQL, etc.)
 
-#### 4.3.4 Endpoints del Servidor
+#### 4.4.5 Endpoints del Servidor
 
 | Método | Ruta | Descripción |
 |--------|------|-------------|
@@ -216,9 +334,9 @@ Antes de importar, muestra los resultados para que el usuario:
 | `POST` | `/api/inventory/discover/swagger` | Explorar Swagger/OpenAPI en URL |
 | `POST` | `/api/inventory/discover/crawl` | Crawlear aplicación web |
 | `POST` | `/api/inventory/discover/probe` | Sondear endpoints comunes |
-| `POST` | `/api/inventory/discover/import` | Importar APIs descubiertas al inventario |
+| `POST` | `/api/inventory/discover/import` | Importar APIs descubiertas con ambientes |
 
-#### 4.3.5 Respuesta del Descubrimiento
+#### 4.4.6 Respuesta del Descubrimiento
 
 ```json
 {
@@ -226,6 +344,9 @@ Antes de importar, muestra los resultados para que el usuario:
     {
       "name": "Users API",
       "base_url": "https://api.example.com",
+      "host": "api.example.com",
+      "detected_environment": "production",
+      "detected_schema": "rest-openapi",
       "endpoints": [
         { "method": "GET", "path": "/v1/users", "description": "List users" },
         { "method": "POST", "path": "/v1/users", "description": "Create user" }
@@ -233,11 +354,13 @@ Antes de importar, muestra los resultados para que el usuario:
       "source": "swagger",
       "confidence": "high"
     }
-  ]
+  ],
+  "new_hosts": ["api.example.com"],
+  "existing_environments": []
 }
 ```
 
-#### 4.3.6 Seguridad y Límites
+#### 4.4.7 Seguridad y Límites
 
 - **Timeout máximo**: 30 segundos por exploración
 - **Profundidad máxima de crawl**: 5 niveles
@@ -246,7 +369,7 @@ Antes de importar, muestra los resultados para que el usuario:
 - **No envía credenciales** a endpoints descubiertos
 - **Advertencia al usuario** antes de explorar URLs externas
 
-### 4.4 Detalle de API (`ApiDetailView`)
+### 4.5 Detalle de API (`ApiDetailView`)
 
 Vista de detalle con pestañas:
 
