@@ -1210,3 +1210,137 @@ body {
 .modal-form textarea {
   resize: vertical;
 }
+
+/* ========== ENVIRONMENT BADGES ========== */
+.env-badge {
+  font-size: 0.65rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 3px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.env-badge.env-development {
+  background: rgba(33, 150, 243, 0.2);
+  color: #42a5f5;
+}
+
+.env-badge.env-qa {
+  background: rgba(255, 152, 0, 0.2);
+  color: #ffa726;
+}
+
+.env-badge.env-production {
+  background: rgba(76, 175, 80, 0.2);
+  color: #66bb6a;
+}
+
+.schema-badge {
+  font-size: 0.65rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 3px;
+  font-weight: 500;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-dim);
+  text-transform: uppercase;
+}
+
+/* ========== DISCOVERY MODAL ========== */
+.discovery-modal {
+  max-width: 600px;
+}
+
+.discovery-step p {
+  color: var(--text-dim);
+  margin-bottom: 1rem;
+  font-size: 0.9rem;
+}
+
+.discovery-methods {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.discovery-method {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  background: var(--bg-dark);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.discovery-method:hover {
+  border-color: var(--accent-blue);
+}
+
+.discovery-method.selected {
+  border-color: var(--accent-blue);
+  background: rgba(0, 122, 204, 0.1);
+}
+
+.discovery-method .method-icon {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent-blue);
+  color: #fff;
+  border-radius: 50%;
+  font-weight: 700;
+  font-size: 0.85rem;
+  flex-shrink: 0;
+}
+
+.discovery-method small {
+  color: var(--text-dim);
+  font-size: 0.75rem;
+}
+
+.discovery-results {
+  max-height: 300px;
+  overflow-y: auto;
+  margin-bottom: 1rem;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+}
+
+.discovery-result-item {
+  padding: 0.6rem 0.75rem;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.discovery-result-item:last-child {
+  border-bottom: none;
+}
+
+.discovery-checkbox {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  cursor: pointer;
+}
+
+.discovery-checkbox input {
+  margin-top: 0.2rem;
+  flex-shrink: 0;
+}
+
+.discovery-meta {
+  display: block;
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  margin-top: 0.2rem;
+}
+
+.discovery-result-item .env-badge,
+.discovery-result-item .schema-badge {
+  margin-left: 0.4rem;
+}

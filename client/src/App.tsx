@@ -145,9 +145,20 @@ function App() {
   // Inventory state
   const [inventoryApis, setInventoryApis] = useState<any[]>([]);
   const [inventoryStats, setInventoryStats] = useState({ total_apis: 0, active_apis: 0, inactive_apis: 0, total_endpoints: 0 });
-  const [inventoryFilter, setInventoryFilter] = useState({ project: '', status: '', search: '' });
+  const [inventoryFilter, setInventoryFilter] = useState({ project: '', status: '', search: '', environment: '' });
   const [showNewApiModal, setShowNewApiModal] = useState(false);
   const [newApiForm, setNewApiForm] = useState({ name: '', description: '', base_url: '', auth_type: 'none', status: 'active', project: 'Default' });
+  const [environments, setEnvironments] = useState<any[]>([]);
+  const [showDiscoveryModal, setShowDiscoveryModal] = useState(false);
+  const [discoveryStep, setDiscoveryStep] = useState(1);
+  const [discoveryMethod, setDiscoveryMethod] = useState('');
+  const [discoveryUrl, setDiscoveryUrl] = useState('');
+  const [discoveryResults, setDiscoveryResults] = useState<any[]>([]);
+  const [discoveryLoading, setDiscoveryLoading] = useState(false);
+  const [discoverySelected, setDiscoverySelected] = useState<Record<number, boolean>>({});
+  const [discoveryEnvForHost, setDiscoveryEnvForHost] = useState<Record<string, string>>({});
+  const [newEnvModal, setNewEnvModal] = useState<{ show: boolean; host: string }>({ show: false, host: '' });
+  const [newEnvForm, setNewEnvForm] = useState({ name: '', type: 'production', project: 'Default' });
 
   const isResizing = useRef(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -374,11 +385,22 @@ function App() {
       if (inventoryFilter.project) params.append('project', inventoryFilter.project);
       if (inventoryFilter.status) params.append('status', inventoryFilter.status);
       if (inventoryFilter.search) params.append('search', inventoryFilter.search);
+      if (inventoryFilter.environment) params.append('environment', inventoryFilter.environment);
       const res = await fetch(`/api/inventory?${params.toString()}`);
       const data = await res.json();
       setInventoryApis(data);
     } catch (e) {
       console.error('Failed to fetch inventory APIs');
+    }
+  };
+
+  const fetchEnvironments = async () => {
+    try {
+      const res = await fetch('/api/environments');
+      const data = await res.json();
+      setEnvironments(data);
+    } catch (e) {
+      console.error('Failed to fetch environments');
     }
   };
 
@@ -390,6 +412,90 @@ function App() {
     } catch (e) {
       console.error('Failed to fetch inventory stats');
     }
+  };
+
+  const startDiscovery = async () => {
+    setDiscoveryLoading(true);
+    setDiscoveryResults([]);
+    try {
+      let res;
+      if (discoveryMethod === 'history') {
+        res = await fetch('/api/inventory/discover/history', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
+      } else if (discoveryMethod === 'swagger') {
+        res = await fetch('/api/inventory/discover/swagger', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: discoveryUrl }) });
+      } else if (discoveryMethod === 'crawl') {
+        res = await fetch('/api/inventory/discover/crawl', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: discoveryUrl, depth: 3 }) });
+      } else if (discoveryMethod === 'probe') {
+        res = await fetch('/api/inventory/discover/probe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: discoveryUrl }) });
+      }
+      if (res) {
+        const data = await res.json();
+        const results = data.discovered || [];
+        setDiscoveryResults(results);
+        const sel: Record<number, boolean> = {};
+        results.forEach((_: any, i: number) => { sel[i] = true; });
+        setDiscoverySelected(sel);
+        // Check for new hosts
+        const existingHosts = environments.map(e => e.host);
+        const newHosts = (data.new_hosts || []).filter((h: string) => !existingHosts.includes(h));
+        if (newHosts.length > 0) {
+          setNewEnvModal({ show: true, host: newHosts[0] });
+          setNewEnvForm({ name: newHosts[0], type: 'production', project: 'Default' });
+        }
+      }
+      setDiscoveryStep(3);
+    } catch (e: any) {
+      showToast('Discovery failed: ' + e.message, 'error');
+    } finally {
+      setDiscoveryLoading(false);
+    }
+  };
+
+  const importDiscovery = async () => {
+    const selectedApis = discoveryResults.filter((_: any, i: number) => discoverySelected[i]);
+    if (selectedApis.length === 0) { showToast('Select at least one API', 'error'); return; }
+    try {
+      const res = await fetch('/api/inventory/discover/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ apis: selectedApis }),
+      });
+      if (!res.ok) throw new Error('Import failed');
+      const data = await res.json();
+      setShowDiscoveryModal(false);
+      resetDiscovery();
+      fetchInventoryApis();
+      fetchInventoryStats();
+      fetchEnvironments();
+      showToast(`Imported ${data.imported} API(s)`);
+    } catch (e: any) {
+      showToast(e.message, 'error');
+    }
+  };
+
+  const createNewEnv = async () => {
+    if (!newEnvForm.name) return;
+    try {
+      const res = await fetch('/api/environments', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...newEnvForm, host: newEnvModal.host, base_url: '' }),
+      });
+      if (!res.ok) throw new Error('Failed to create environment');
+      setNewEnvModal({ show: false, host: '' });
+      fetchEnvironments();
+      showToast('Environment created');
+    } catch (e: any) {
+      showToast(e.message, 'error');
+    }
+  };
+
+  const resetDiscovery = () => {
+    setDiscoveryStep(1);
+    setDiscoveryMethod('');
+    setDiscoveryUrl('');
+    setDiscoveryResults([]);
+    setDiscoverySelected({});
   };
 
   const handleCreateApi = async () => {
@@ -427,6 +533,7 @@ function App() {
     if (appMode === 'inventory') {
       fetchInventoryApis();
       fetchInventoryStats();
+      fetchEnvironments();
     }
   }, [appMode, inventoryFilter]);
 
@@ -1571,7 +1678,10 @@ function App() {
         <div className="inventory-view">
           <div className="inventory-header">
             <h2>API Inventory</h2>
-            <button className="send-button" onClick={() => setShowNewApiModal(true)}>+ New API</button>
+            <div style={{display: 'flex', gap: '0.5rem'}}>
+              <button className="send-button" style={{background: '#2d6a2d'}} onClick={() => { setShowDiscoveryModal(true); resetDiscovery(); }}>Discover</button>
+              <button className="send-button" onClick={() => setShowNewApiModal(true)}>+ New API</button>
+            </div>
           </div>
 
           <div className="inventory-filters">
@@ -1586,6 +1696,12 @@ function App() {
               <option value="inactive">Inactive</option>
               <option value="deprecated">Deprecated</option>
             </select>
+            <select value={inventoryFilter.environment} onChange={(e) => setInventoryFilter({ ...inventoryFilter, environment: e.target.value })}>
+              <option value="">All Environments</option>
+              <option value="dev">Development</option>
+              <option value="qa">QA</option>
+              <option value="prod">Production</option>
+            </select>
           </div>
 
           <div className="inventory-stats">
@@ -1596,7 +1712,7 @@ function App() {
           </div>
 
           <div className="inventory-grid">
-            {inventoryApis.length === 0 && <p style={{color: '#666', gridColumn: '1/-1'}}>No APIs found. Create one to get started.</p>}
+            {inventoryApis.length === 0 && <p style={{color: '#666', gridColumn: '1/-1'}}>No APIs found. Create or discover one to get started.</p>}
             {inventoryApis.map((api) => (
               <div key={api.id} className="api-card">
                 <div className="api-card-header">
@@ -1615,6 +1731,8 @@ function App() {
                 </div>
                 <div className="api-card-footer">
                   <span className={`api-status-badge ${api.status}`}>{api.status}</span>
+                  {api.environment_name && <span className={`env-badge env-${api.environment_type}`}>{api.environment_name}</span>}
+                  {api.detected_schema && api.detected_schema !== 'unknown' && <span className="schema-badge">{api.detected_schema}</span>}
                   <span className="api-project-badge">{api.project}</span>
                 </div>
               </div>
@@ -1647,6 +1765,107 @@ function App() {
                 <div className="import-modal-actions">
                   <button className="send-button" onClick={handleCreateApi}>Create API</button>
                   <button className="send-button" style={{background: 'transparent', border: '1px solid #444'}} onClick={() => setShowNewApiModal(false)}>Cancel</button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {showDiscoveryModal && (
+            <div className="import-modal-overlay">
+              <div className="import-modal discovery-modal">
+                <h3>Discover APIs</h3>
+
+                {discoveryStep === 1 && (
+                  <div className="discovery-step">
+                    <p>Step 1: Select discovery method</p>
+                    <div className="discovery-methods">
+                      {[
+                        { id: 'history', label: 'From API Client History', desc: 'Analyze previously executed requests', icon: '1' },
+                        { id: 'swagger', label: 'Swagger/OpenAPI Scanner', desc: 'Find and parse API documentation', icon: '2' },
+                        { id: 'crawl', label: 'Web Application Crawler', desc: 'Follow links to discover endpoints', icon: '3' },
+                        { id: 'probe', label: 'Common Endpoint Probing', desc: 'Test standard API paths', icon: '4' },
+                      ].map(m => (
+                        <div key={m.id} className={`discovery-method ${discoveryMethod === m.id ? 'selected' : ''}`} onClick={() => setDiscoveryMethod(m.id)}>
+                          <span className="method-icon">{m.icon}</span>
+                          <div><strong>{m.label}</strong><br/><small>{m.desc}</small></div>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="import-modal-actions">
+                      <button className="send-button" disabled={!discoveryMethod} onClick={() => setDiscoveryStep(2)}>Next</button>
+                      <button className="send-button" style={{background: 'transparent', border: '1px solid #444'}} onClick={() => { setShowDiscoveryModal(false); resetDiscovery(); }}>Cancel</button>
+                    </div>
+                  </div>
+                )}
+
+                {discoveryStep === 2 && (
+                  <div className="discovery-step">
+                    <p>Step 2: Configure {discoveryMethod === 'history' ? '(no configuration needed)' : 'target URL'}</p>
+                    {discoveryMethod !== 'history' && (
+                      <div className="modal-form">
+                        <input placeholder="Base URL (e.g. https://api.example.com)" value={discoveryUrl} onChange={(e) => setDiscoveryUrl(e.target.value)} />
+                      </div>
+                    )}
+                    <div className="import-modal-actions">
+                      <button className="send-button" onClick={startDiscovery} disabled={discoveryLoading}>
+                        {discoveryLoading ? 'Discovering...' : 'Start Discovery'}
+                      </button>
+                      <button className="send-button" style={{background: 'transparent', border: '1px solid #444'}} onClick={() => setDiscoveryStep(1)}>Back</button>
+                    </div>
+                  </div>
+                )}
+
+                {discoveryStep === 3 && (
+                  <div className="discovery-step">
+                    <p>Step 3: Review and import ({discoveryResults.length} API(s) found)</p>
+                    {discoveryResults.length === 0 ? (
+                      <p style={{color: '#666'}}>No APIs discovered. Try a different method or URL.</p>
+                    ) : (
+                      <div className="discovery-results">
+                        {discoveryResults.map((api: any, i: number) => (
+                          <div key={i} className="discovery-result-item">
+                            <label className="discovery-checkbox">
+                              <input type="checkbox" checked={!!discoverySelected[i]} onChange={(e) => setDiscoverySelected({ ...discoverySelected, [i]: e.target.checked })} />
+                              <div>
+                                <strong>{api.name}</strong>
+                                <span className="discovery-meta">{api.endpoints?.length || 0} endpoints | {api.source} | {api.confidence}</span>
+                                <span className={`env-badge env-${api.detected_environment}`}>{api.detected_environment}</span>
+                                {api.detected_schema && <span className="schema-badge">{api.detected_schema}</span>}
+                              </div>
+                            </label>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    <div className="import-modal-actions">
+                      <button className="send-button" disabled={discoveryResults.length === 0} onClick={importDiscovery}>
+                        Import Selected ({Object.values(discoverySelected).filter(Boolean).length})
+                      </button>
+                      <button className="send-button" style={{background: 'transparent', border: '1px solid #444'}} onClick={() => setDiscoveryStep(2)}>Back</button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {newEnvModal.show && (
+            <div className="import-modal-overlay">
+              <div className="import-modal">
+                <h3>New Environment Detected</h3>
+                <p style={{color: '#aaa', marginBottom: '1rem'}}>Host: <strong>{newEnvModal.host}</strong></p>
+                <div className="modal-form">
+                  <input placeholder="Environment name" value={newEnvForm.name} onChange={(e) => setNewEnvForm({ ...newEnvForm, name: e.target.value })} />
+                  <select value={newEnvForm.type} onChange={(e) => setNewEnvForm({ ...newEnvForm, type: e.target.value })}>
+                    <option value="development">Development</option>
+                    <option value="qa">QA</option>
+                    <option value="production">Production</option>
+                  </select>
+                  <input placeholder="Project" value={newEnvForm.project} onChange={(e) => setNewEnvForm({ ...newEnvForm, project: e.target.value })} />
+                </div>
+                <div className="import-modal-actions">
+                  <button className="send-button" onClick={createNewEnv}>Create Environment</button>
+                  <button className="send-button" style={{background: 'transparent', border: '1px solid #444'}} onClick={() => setNewEnvModal({ show: false, host: '' })}>Skip</button>
                 </div>
               </div>
             </div>

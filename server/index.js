@@ -184,21 +184,128 @@ db.run(`CREATE TABLE IF NOT EXISTS load_test_results (
 db.run(`ALTER TABLE saved_requests ADD COLUMN api_id INTEGER`, () => {});
 db.run(`ALTER TABLE saved_requests ADD COLUMN endpoint_id INTEGER`, () => {});
 
+// Environments table
+db.run(`CREATE TABLE IF NOT EXISTS environments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  type TEXT NOT NULL DEFAULT 'development',
+  base_url TEXT,
+  host TEXT,
+  project TEXT DEFAULT 'Default',
+  description TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+)`);
+
+// Add environment and schema columns to api_inventory
+db.run(`ALTER TABLE api_inventory ADD COLUMN environment_id INTEGER`, () => {});
+db.run(`ALTER TABLE api_inventory ADD COLUMN detected_schema TEXT DEFAULT 'unknown'`, () => {});
+
+// ========== ENVIRONMENT DETECTION ==========
+
+function detectEnvironment(url) {
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname;
+    const port = parsed.port;
+    const hostFull = port ? `${host}:${port}` : host;
+
+    let type = 'production';
+    if (host === 'localhost' || host === '127.0.0.1' || host.endsWith('.local') || host.endsWith('.dev')
+        || port === '3000' || port === '8080' || port === '5173' || port === '4200') {
+      type = 'development';
+    } else if (host.includes('.qa.') || host.includes('.staging.') || host.startsWith('qa-')
+        || host.startsWith('staging-') || host.includes('.test.') || host.startsWith('test-')) {
+      type = 'qa';
+    }
+
+    return { type, host: hostFull, hostname: host };
+  } catch {
+    return { type: 'production', host: url, hostname: url };
+  }
+}
+
+function detectSchema(headers, body) {
+  const contentType = (headers && headers['content-type']) || '';
+  if (contentType.includes('xml') && (body || '').includes('<soap')) return 'soap';
+  if (contentType.includes('protobuf') || contentType.includes('grpc')) return 'grpc';
+  if (contentType.includes('graphql')) return 'graphql';
+  return 'rest';
+}
+
+// ========== ENVIRONMENTS CRUD ==========
+
+app.get('/api/environments', (req, res) => {
+  const { project } = req.query;
+  let sql = `SELECT * FROM environments`;
+  const params = [];
+  if (project) { sql += ` WHERE project = ?`; params.push(project); }
+  sql += ` ORDER BY type ASC, name ASC`;
+  db.all(sql, params, (err, rows) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json(rows);
+  });
+});
+
+app.get('/api/environments/hosts', (req, res) => {
+  db.all(`SELECT DISTINCT host, type, name, id FROM environments ORDER BY host`, [], (err, rows) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json(rows);
+  });
+});
+
+app.post('/api/environments', (req, res) => {
+  const { name, type, base_url, host, project, description } = req.body;
+  if (!name) return res.status(400).json({ error: 'Name is required' });
+  db.run(
+    `INSERT INTO environments (name, type, base_url, host, project, description) VALUES (?, ?, ?, ?, ?, ?)`,
+    [name, type || 'development', base_url || '', host || '', project || 'Default', description || ''],
+    function(err) {
+      if (err) return res.status(500).json({ error: err.message });
+      res.json({ id: this.lastID, message: 'Environment created' });
+    }
+  );
+});
+
+app.put('/api/environments/:id', (req, res) => {
+  const { name, type, base_url, host, project, description } = req.body;
+  db.run(
+    `UPDATE environments SET name=?, type=?, base_url=?, host=?, project=?, description=? WHERE id=?`,
+    [name, type || 'development', base_url || '', host || '', project || 'Default', description || '', req.params.id],
+    function(err) {
+      if (err) return res.status(500).json({ error: err.message });
+      if (this.changes === 0) return res.status(404).json({ error: 'Environment not found' });
+      res.json({ message: 'Environment updated' });
+    }
+  );
+});
+
+app.delete('/api/environments/:id', (req, res) => {
+  db.run(`DELETE FROM environments WHERE id = ?`, [req.params.id], function(err) {
+    if (err) return res.status(500).json({ error: err.message });
+    if (this.changes === 0) return res.status(404).json({ error: 'Environment not found' });
+    res.json({ message: 'Environment deleted' });
+  });
+});
+
 // ========== INVENTORY CRUD ==========
 
 // List APIs
 app.get('/api/inventory', (req, res) => {
-  const { project, status, search } = req.query;
+  const { project, status, search, environment } = req.query;
   let sql = `SELECT i.*,
+    e.name as environment_name, e.type as environment_type, e.host as environment_host,
     (SELECT COUNT(*) FROM api_endpoints WHERE api_id = i.id) as endpoint_count,
     (SELECT IFNULL(SUM(call_count), 0) FROM api_statistics WHERE api_id = i.id) as total_calls,
     (SELECT IFNULL(avg_response_time, 0) FROM api_statistics WHERE api_id = i.id) as avg_response_time
-    FROM api_inventory i WHERE 1=1`;
+    FROM api_inventory i
+    LEFT JOIN environments e ON i.environment_id = e.id
+    WHERE 1=1`;
   const params = [];
   if (project) { sql += ` AND i.project = ?`; params.push(project); }
   if (status) { sql += ` AND i.status = ?`; params.push(status); }
   if (search) { sql += ` AND i.name LIKE ?`; params.push(`%${search}%`); }
-  sql += ` ORDER BY i.updated_at DESC`;
+  if (environment) { sql += ` AND i.environment_id = ?`; params.push(environment); }
+  sql += ` ORDER BY e.type ASC, i.name ASC`;
   db.all(sql, params, (err, rows) => {
     if (err) return res.status(500).json({ error: err.message });
     res.json(rows);
@@ -309,6 +416,304 @@ app.delete('/api/inventory/endpoints/:id', (req, res) => {
     if (this.changes === 0) return res.status(404).json({ error: 'Endpoint not found' });
     res.json({ message: 'Endpoint deleted' });
   });
+});
+
+// ========== API DISCOVERY ==========
+
+// Discover from client history
+app.post('/api/inventory/discover/history', async (req, res) => {
+  try {
+    db.all(`SELECT DISTINCT url, method FROM history ORDER BY timestamp DESC`, [], (err, rows) => {
+      if (err) return res.status(500).json({ error: err.message });
+
+      const hostMap = {};
+      rows.forEach(row => {
+        try {
+          const parsed = new URL(row.url);
+          const host = parsed.port ? `${parsed.hostname}:${parsed.port}` : parsed.hostname;
+          if (!hostMap[host]) {
+            const env = detectEnvironment(row.url);
+            hostMap[host] = { host, base_url: `${parsed.protocol}//${host}`, environment: env.type, endpoints: {} };
+          }
+          const pathParts = parsed.pathname.split('/').filter(Boolean);
+          const versionMatch = pathParts[0] && /^v\d+$/.test(pathParts[0]) ? pathParts[0] : null;
+          const apiPrefix = versionMatch ? `/${versionMatch}` : (pathParts[0] === 'api' ? '/api' : '');
+          const resourcePath = apiPrefix + '/' + pathParts.slice(versionMatch ? 1 : (pathParts[0] === 'api' ? 1 : 0)).join('/');
+          const key = `${row.method}:${resourcePath}`;
+
+          if (!hostMap[host].endpoints[key]) {
+            hostMap[host].endpoints[key] = { method: row.method, path: resourcePath || '/', count: 0 };
+          }
+          hostMap[host].endpoints[key].count++;
+        } catch {}
+      });
+
+      const discovered = Object.values(hostMap).map(h => ({
+        name: h.host,
+        base_url: h.base_url,
+        host: h.host,
+        detected_environment: h.environment,
+        detected_schema: 'rest',
+        endpoints: Object.values(h.endpoints).sort((a, b) => a.path.localeCompare(b.path)),
+        source: 'history',
+        confidence: 'medium',
+      }));
+
+      res.json({ discovered, new_hosts: discovered.map(d => d.host) });
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Discover via Swagger/OpenAPI
+app.post('/api/inventory/discover/swagger', async (req, res) => {
+  const { url } = req.body;
+  if (!url) return res.status(400).json({ error: 'URL is required' });
+
+  const env = detectEnvironment(url);
+  const swaggerPaths = ['/swagger.json', '/swagger/v1/swagger.json', '/api-docs', '/openapi.json', '/openapi.yaml', '/docs/swagger.json', '/api/swagger.json', '/-/openapi.json'];
+
+  try {
+    let spec = null;
+    for (const sp of swaggerPaths) {
+      try {
+        const base = url.replace(/\/$/, '');
+        const response = await axios.get(`${base}${sp}`, { timeout: 5000, validateStatus: () => true });
+        if (response.status === 200 && response.data && (response.data.paths || response.data.openapi || response.data.swagger)) {
+          spec = response.data;
+          break;
+        }
+      } catch {}
+    }
+
+    if (!spec) return res.json({ discovered: [], error: 'No OpenAPI/Swagger document found' });
+
+    const basePath = spec.basePath || '';
+    const endpoints = [];
+    if (spec.paths) {
+      Object.entries(spec.paths).forEach(([path, methods]) => {
+        Object.keys(methods).forEach(method => {
+          if (['get', 'post', 'put', 'delete', 'patch'].includes(method.toLowerCase())) {
+            endpoints.push({
+              method: method.toUpperCase(),
+              path: basePath + path,
+              description: methods[method].summary || methods[method].description || '',
+            });
+          }
+        });
+      });
+    }
+
+    const host = env.host;
+    const apiName = spec.info?.title || host;
+
+    res.json({
+      discovered: [{
+        name: apiName,
+        base_url: url.replace(/\/$/, ''),
+        host,
+        detected_environment: env.type,
+        detected_schema: 'rest-openapi',
+        endpoints,
+        source: 'swagger',
+        confidence: 'high',
+      }],
+      new_hosts: [host],
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Discover via web crawling
+app.post('/api/inventory/discover/crawl', async (req, res) => {
+  const { url, depth = 3 } = req.body;
+  if (!url) return res.status(400).json({ error: 'URL is required' });
+
+  const env = detectEnvironment(url);
+  const visited = new Set();
+  const foundEndpoints = new Set();
+  const maxDepth = Math.min(depth, 5);
+
+  async function crawl(currentUrl, currentDepth) {
+    if (currentDepth > maxDepth || visited.has(currentUrl)) return;
+    visited.add(currentUrl);
+
+    try {
+      const response = await axios.get(currentUrl, { timeout: 5000, validateStatus: () => true, headers: { 'User-Agent': 'APIClient-Discovery/1.0' } });
+      if (typeof response.data !== 'string') return;
+
+      const html = response.data;
+      const parsedBase = new URL(currentUrl);
+
+      // Extract links
+      const linkRegex = /href=["']([^"']+)["']/gi;
+      let match;
+      while ((match = linkRegex.exec(html)) !== null) {
+        try {
+          const linkUrl = new URL(match[1], currentUrl);
+          if (linkUrl.hostname === parsedBase.hostname) {
+            const path = linkUrl.pathname;
+            if (path.match(/\/(api|v\d+|rest|graphql|grpc)/i) || path.split('/').length > 2) {
+              foundEndpoints.add(path);
+            }
+            if (!visited.has(linkUrl.href) && currentDepth < maxDepth) {
+              await crawl(linkUrl.href, currentDepth + 1);
+            }
+          }
+        } catch {}
+      }
+
+      // Extract API patterns from script content
+      const apiRegex = /["'](\/(?:api|v\d+|rest)[^"']*?)["']/gi;
+      while ((match = apiRegex.exec(html)) !== null) {
+        foundEndpoints.add(match[1]);
+      }
+    } catch {}
+  }
+
+  await crawl(url, 0);
+
+  const endpoints = [...foundEndpoints].sort().map(path => ({ method: 'GET', path, description: '' }));
+
+  res.json({
+    discovered: [{
+      name: env.host,
+      base_url: url.replace(/\/$/, ''),
+      host: env.host,
+      detected_environment: env.type,
+      detected_schema: 'rest',
+      endpoints,
+      source: 'crawl',
+      confidence: 'low',
+    }],
+    new_hosts: [env.host],
+  });
+});
+
+// Discover via endpoint probing
+app.post('/api/inventory/discover/probe', async (req, res) => {
+  const { url } = req.body;
+  if (!url) return res.status(400).json({ error: 'URL is required' });
+
+  const env = detectEnvironment(url);
+  const prefixes = ['/api', '/v1', '/v2', '/v3', '/rest'];
+  const resources = ['/users', '/items', '/products', '/orders', '/auth', '/login', '/health', '/status', '/ping', '/config', '/me', '/info'];
+  const endpoints = [];
+
+  const base = url.replace(/\/$/, '');
+
+  for (const prefix of prefixes) {
+    for (const resource of resources) {
+      try {
+        const testUrl = `${base}${prefix}${resource}`;
+        const response = await axios.head(testUrl, { timeout: 3000, validateStatus: () => true });
+        if (response.status >= 200 && response.status < 404) {
+          endpoints.push({ method: 'HEAD', path: `${prefix}${resource}`, description: `Status: ${response.status}` });
+        }
+      } catch {}
+    }
+    // Also try just the prefix
+    try {
+      const testUrl = `${base}${prefix}`;
+      const response = await axios.head(testUrl, { timeout: 3000, validateStatus: () => true });
+      if (response.status >= 200 && response.status < 404) {
+        endpoints.push({ method: 'HEAD', path: prefix, description: `Status: ${response.status}` });
+      }
+    } catch {}
+  }
+
+  res.json({
+    discovered: [{
+      name: env.host,
+      base_url: base,
+      host: env.host,
+      detected_environment: env.type,
+      detected_schema: 'rest',
+      endpoints,
+      source: 'probe',
+      confidence: 'medium',
+    }],
+    new_hosts: [env.host],
+  });
+});
+
+// Import discovered APIs
+app.post('/api/inventory/discover/import', (req, res) => {
+  const { apis, environments: envs } = req.body;
+  if (!apis || !Array.isArray(apis)) return res.status(400).json({ error: 'apis array is required' });
+
+  let imported = 0;
+  let processed = 0;
+
+  const envMap = {};
+  const runImport = () => {
+    if (processed === apis.length) {
+      return res.json({ imported });
+    }
+
+    const api = apis[processed];
+    processed++;
+
+    // Find or create environment
+    const findOrCreateEnv = (callback) => {
+      if (!api.host) return callback(null);
+
+      // Check if environment exists by host
+      db.get(`SELECT id FROM environments WHERE host = ?`, [api.host], (err, row) => {
+        if (row) return callback(row.id);
+
+        // Check provided environments
+        const providedEnv = (envs || []).find(e => e.host === api.host);
+        if (providedEnv) {
+          db.run(
+            `INSERT INTO environments (name, type, host, base_url, project) VALUES (?, ?, ?, ?, ?)`,
+            [providedEnv.name, providedEnv.type || 'production', api.host, api.base_url || '', providedEnv.project || 'Default'],
+            function(err) {
+              callback(err ? null : this.lastID);
+            }
+          );
+        } else {
+          // Auto-create with detected type
+          const envType = api.detected_environment || 'production';
+          const envName = api.host;
+          db.run(
+            `INSERT INTO environments (name, type, host, base_url) VALUES (?, ?, ?, ?)`,
+            [envName, envType, api.host, api.base_url || ''],
+            function(err) {
+              callback(err ? null : this.lastID);
+            }
+          );
+        }
+      });
+    };
+
+    findOrCreateEnv((envId) => {
+      db.run(
+        `INSERT INTO api_inventory (name, base_url, status, environment_id, detected_schema, project) VALUES (?, ?, 'active', ?, ?, ?)`,
+        [api.name || api.host, api.base_url || '', envId, api.detected_schema || 'unknown', api.project || 'Default'],
+        function(err) {
+          if (err) return runImport();
+          const apiId = this.lastID;
+          imported++;
+
+          // Insert endpoints
+          if (api.endpoints && api.endpoints.length > 0) {
+            const stmt = db.prepare(`INSERT INTO api_endpoints (api_id, method, path, description) VALUES (?, ?, ?, ?)`);
+            api.endpoints.forEach(ep => {
+              stmt.run(apiId, ep.method, ep.path, ep.description || '');
+            });
+            stmt.finalize();
+          }
+
+          runImport();
+        }
+      );
+    });
+  };
+
+  runImport();
 });
 
 // ========== DEPENDENCIES CRUD ==========
