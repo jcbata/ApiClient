@@ -318,10 +318,41 @@ app.get('/api/inventory/stats/overview', (req, res) => {
     COUNT(*) as total_apis,
     SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) as active_apis,
     SUM(CASE WHEN status = 'inactive' THEN 1 ELSE 0 END) as inactive_apis,
-    (SELECT COUNT(*) FROM api_endpoints) as total_endpoints
+    (SELECT COUNT(*) FROM api_endpoints) as total_endpoints,
+    (SELECT COUNT(*) FROM api_dependencies) as total_dependencies,
+    (SELECT SUM(total_calls) FROM api_inventory) as total_calls,
+    (SELECT ROUND(AVG(avg_response_time)) FROM api_inventory WHERE avg_response_time > 0) as avg_response_time
   FROM api_inventory`, [], (err, row) => {
     if (err) return res.status(500).json({ error: err.message });
-    res.json(row);
+
+    // Top APIs by calls
+    db.all(`SELECT id, name, total_calls, avg_response_time, status, environment_type
+      FROM api_inventory WHERE total_calls > 0 ORDER BY total_calls DESC LIMIT 5`, [], (err, topApis) => {
+      if (err) return res.status(500).json({ error: err.message });
+
+      // Recent activity
+      db.all(`SELECT a.*, i.name as api_name
+        FROM api_activity_log a
+        LEFT JOIN api_inventory i ON a.api_inventory_id = i.id
+        ORDER BY a.created_at DESC LIMIT 10`, [], (err, recentActivity) => {
+        if (err) return res.status(500).json({ error: err.message });
+
+        // Calls by hour (last 24h)
+        db.all(`SELECT strftime('%H', created_at) as hour, COUNT(*) as count
+          FROM api_statistics
+          WHERE created_at >= datetime('now', '-24 hours')
+          GROUP BY hour ORDER BY hour`, [], (err, hourlyCalls) => {
+          if (err) return res.status(500).json({ error: err.message });
+
+          res.json({
+            ...row,
+            top_apis: topApis || [],
+            recent_activity: recentActivity || [],
+            hourly_calls: hourlyCalls || [],
+          });
+        });
+      });
+    });
   });
 });
 
@@ -859,6 +890,24 @@ app.post('/api/execute', async (req, res) => {
         JSON.stringify(response.headers)
       ]
     );
+
+    // Log to api_statistics and api_activity_log if api_inventory_id provided
+    const apiInventoryId = req.body.api_inventory_id;
+    if (apiInventoryId) {
+      const isSuccess = response.status >= 200 && response.status < 400;
+      db.run(
+        `INSERT INTO api_statistics (api_inventory_id, endpoint_id, method, url, status_code, response_time, success) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [apiInventoryId, req.body.endpoint_id || null, method, url, response.status, duration, isSuccess ? 1 : 0]
+      );
+      db.run(
+        `UPDATE api_inventory SET total_calls = total_calls + 1, avg_response_time = CASE WHEN avg_response_time = 0 THEN ? ELSE (avg_response_time + ?) / 2 END, last_used = CURRENT_TIMESTAMP WHERE id = ?`,
+        [duration, duration, apiInventoryId]
+      );
+      db.run(
+        `INSERT INTO api_activity_log (api_inventory_id, activity_type, detail) VALUES (?, 'call', ?)`,
+        [apiInventoryId, `${method} ${url} -> ${response.status} (${duration}ms)`]
+      );
+    }
 
     res.json({
       status: response.status,

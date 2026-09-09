@@ -37,6 +37,8 @@ interface ApiTab {
   savedRequestId?: number;
   hasUnsavedChanges: boolean;
   createdAt: number;
+  apiInventoryId?: number;
+  endpointId?: number;
 }
 
 const STORAGE_KEY = 'apiClient_tabs';
@@ -144,7 +146,7 @@ function App() {
 
   // Inventory state
   const [inventoryApis, setInventoryApis] = useState<any[]>([]);
-  const [inventoryStats, setInventoryStats] = useState({ total_apis: 0, active_apis: 0, inactive_apis: 0, total_endpoints: 0 });
+  const [inventoryStats, setInventoryStats] = useState({ total_apis: 0, active_apis: 0, inactive_apis: 0, total_endpoints: 0, total_dependencies: 0, total_calls: 0, avg_response_time: 0, top_apis: [], recent_activity: [] });
   const [inventoryFilter, setInventoryFilter] = useState({ project: '', status: '', search: '', environment: '' });
   const [showNewApiModal, setShowNewApiModal] = useState(false);
   const [newApiForm, setNewApiForm] = useState({ name: '', description: '', base_url: '', auth_type: 'none', status: 'active', project: 'Default' });
@@ -1205,7 +1207,9 @@ function App() {
           data: isMultipart ? undefined : requestData,
           multipartData,
           auth: tab.auth.type === 'none' ? null : tab.auth,
-          ignoreSSL: tab.ignoreSSL
+          ignoreSSL: tab.ignoreSSL,
+          api_inventory_id: tab.apiInventoryId || undefined,
+          endpoint_id: tab.endpointId || undefined,
         })
       });
       const data = await res.json();
@@ -1824,6 +1828,8 @@ function App() {
             <div className="stat-card"><span className="stat-value" style={{color: '#4caf50'}}>{inventoryStats.active_apis}</span><span className="stat-label">Active</span></div>
             <div className="stat-card"><span className="stat-value" style={{color: '#ff9800'}}>{inventoryStats.inactive_apis}</span><span className="stat-label">Inactive</span></div>
             <div className="stat-card"><span className="stat-value" style={{color: '#007acc'}}>{inventoryStats.total_endpoints}</span><span className="stat-label">Endpoints</span></div>
+            <div className="stat-card"><span className="stat-value" style={{color: '#9c27b0'}}>{inventoryStats.total_dependencies || 0}</span><span className="stat-label">Dependencies</span></div>
+            <div className="stat-card"><span className="stat-value" style={{color: '#e91e63'}}>{inventoryStats.total_calls || 0}</span><span className="stat-label">Total Calls</span></div>
           </div>
 
           <div className="inventory-grid">
@@ -2003,8 +2009,12 @@ function App() {
                 setUrl(apiDetail.base_url || '');
                 setMethod('GET');
                 setTabName(apiDetail.name);
+                // Update current tab with apiInventoryId for tracking
+                const updatedTabs = [...tabs];
+                updatedTabs[activeTabIndex] = { ...updatedTabs[activeTabIndex], url: apiDetail.base_url || '', method: 'GET' as Method, name: apiDetail.name, apiInventoryId: apiDetail.id };
+                setTabs(updatedTabs);
                 setAppMode('client');
-                showToast('Loaded into Client tab');
+                showToast('Loaded into Client tab (tracking enabled)');
               }}>Open in Client</button>
               <button className="send-button" style={{background: '#2d6a2d'}} onClick={() => {
                 setNewApiForm({ name: apiDetail.name, description: apiDetail.description || '', base_url: apiDetail.base_url || '', auth_type: apiDetail.auth_type || 'none', status: apiDetail.status, project: apiDetail.project });
