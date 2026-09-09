@@ -161,6 +161,7 @@ function App() {
   const [discoveryEnvForHost, setDiscoveryEnvForHost] = useState<Record<string, string>>({});
   const [newEnvModal, setNewEnvModal] = useState<{ show: boolean; host: string }>({ show: false, host: '' });
   const [newEnvForm, setNewEnvForm] = useState({ name: '', type: 'production', project: 'Default' });
+  const [pendingHosts, setPendingHosts] = useState<string[]>([]);
   // API Detail state
   const [selectedApiId, setSelectedApiId] = useState<number | null>(null);
   const [apiDetail, setApiDetail] = useState<any>(null);
@@ -457,20 +458,26 @@ function App() {
       }
       if (res) {
         const data = await res.json();
-        const results = data.discovered || [];
-        setDiscoveryResults(results);
-        const sel: Record<number, boolean> = {};
-        results.forEach((_: any, i: number) => { sel[i] = true; });
-        setDiscoverySelected(sel);
-        // Check for new hosts
+        const allResults = data.discovered || [];
+        // Store ALL results, but we'll filter by host when showing
+        setDiscoveryResults(allResults);
+        // Check for new hosts not yet in environments
         const existingHosts = environments.map(e => e.host);
         const newHosts = (data.new_hosts || []).filter((h: string) => !existingHosts.includes(h));
         if (newHosts.length > 0) {
+          // Queue all new hosts, show modal for first one
+          setPendingHosts(newHosts.slice(1));
           setNewEnvModal({ show: true, host: newHosts[0] });
           setNewEnvForm({ name: newHosts[0], type: 'production', project: 'Default' });
+          // Don't go to step 3 yet - wait until all hosts are processed
+          return;
         }
+        // No new hosts - show all results
+        const sel: Record<number, boolean> = {};
+        allResults.forEach((_: any, i: number) => { sel[i] = true; });
+        setDiscoverySelected(sel);
+        setDiscoveryStep(3);
       }
-      setDiscoveryStep(3);
     } catch (e: any) {
       showToast('Discovery failed: ' + e.message, 'error');
     } finally {
@@ -509,9 +516,24 @@ function App() {
         body: JSON.stringify({ ...newEnvForm, host: newEnvModal.host, base_url: '' }),
       });
       if (!res.ok) throw new Error('Failed to create environment');
-      setNewEnvModal({ show: false, host: '' });
       fetchEnvironments();
       showToast('Environment created');
+      // Check for more pending hosts
+      if (pendingHosts.length > 0) {
+        const nextHost = pendingHosts[0];
+        setPendingHosts(pendingHosts.slice(1));
+        setNewEnvModal({ show: true, host: nextHost });
+        setNewEnvForm({ name: nextHost, type: 'production', project: 'Default' });
+      } else {
+        // All hosts processed - filter results by the host we just created env for
+        const hostResults = discoveryResults.filter((r: any) => r.host === newEnvModal.host);
+        const sel: Record<number, boolean> = {};
+        hostResults.forEach((_: any, i: number) => { sel[i] = true; });
+        setDiscoveryResults(hostResults);
+        setDiscoverySelected(sel);
+        setNewEnvModal({ show: false, host: '' });
+        setDiscoveryStep(3);
+      }
     } catch (e: any) {
       showToast(e.message, 'error');
     }
@@ -523,6 +545,7 @@ function App() {
     setDiscoveryUrl('');
     setDiscoveryResults([]);
     setDiscoverySelected({});
+    setPendingHosts([]);
   };
 
   const openApiDetail = async (id: number) => {
@@ -2109,7 +2132,25 @@ function App() {
                 </div>
                 <div className="import-modal-actions">
                   <button className="send-button" onClick={createNewEnv}>Create Environment</button>
-                  <button className="send-button" style={{background: 'transparent', border: '1px solid #444'}} onClick={() => setNewEnvModal({ show: false, host: '' })}>Skip</button>
+                  <button className="send-button" style={{background: 'transparent', border: '1px solid #444'}} onClick={() => {
+                    // Skip this host - check for more pending
+                    if (pendingHosts.length > 0) {
+                      const nextHost = pendingHosts[0];
+                      setPendingHosts(pendingHosts.slice(1));
+                      setNewEnvModal({ show: true, host: nextHost });
+                      setNewEnvForm({ name: nextHost, type: 'production', project: 'Default' });
+                    } else {
+                      // No more pending - show results for hosts that already have environments
+                      const existingHosts = environments.map(e => e.host);
+                      const filtered = discoveryResults.filter((r: any) => existingHosts.includes(r.host));
+                      const sel: Record<number, boolean> = {};
+                      filtered.forEach((_: any, i: number) => { sel[i] = true; });
+                      setDiscoveryResults(filtered);
+                      setDiscoverySelected(sel);
+                      setNewEnvModal({ show: false, host: '' });
+                      setDiscoveryStep(3);
+                    }
+                  }}>Skip</button>
                 </div>
               </div>
             </div>
