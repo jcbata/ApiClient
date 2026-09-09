@@ -1507,3 +1507,79 @@ body {
   display: flex;
   gap: 0.4rem;
 }
+
+/* ========== DEPENDENCY GRAPH ========== */
+.detail-dependencies {
+  margin-top: 0.5rem;
+}
+
+.dependency-graph {
+  background: var(--bg-dark);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 1.5rem;
+}
+
+.dep-graph-center {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
+}
+
+.dep-node {
+  background: var(--bg-secondary);
+  border: 2px solid var(--accent-blue);
+  border-radius: 8px;
+  padding: 0.75rem 1.5rem;
+  text-align: center;
+}
+
+.dep-self {
+  border-color: var(--accent-blue);
+  box-shadow: 0 0 12px rgba(0, 122, 204, 0.2);
+}
+
+.dep-arrows {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  width: 100%;
+}
+
+.dep-arrow-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  background: rgba(76, 175, 80, 0.1);
+  border: 1px solid rgba(76, 175, 80, 0.3);
+  border-radius: 6px;
+  font-size: 0.85rem;
+}
+
+.dep-arrow-row.dep-incoming {
+  background: rgba(255, 152, 0, 0.1);
+  border-color: rgba(255, 152, 0, 0.3);
+}
+
+.dep-arrow {
+  font-size: 1.2rem;
+}
+
+.dep-type {
+  font-weight: 600;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  font-size: 0.7rem;
+}
+
+.dep-target,
+.dep-source {
+  font-weight: 600;
+  color: var(--text-main);
+}
+
+.dep-arrow-row .delete-item-btn {
+  margin-left: auto;
+}

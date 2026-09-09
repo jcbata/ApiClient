@@ -171,6 +171,10 @@ function App() {
   const [editingEndpointId, setEditingEndpointId] = useState<number | null>(null);
   const [endpointForm, setEndpointForm] = useState({ name: '', method: 'GET', path: '/', description: '', request_example: '', response_example: '', error_codes: '', notes: '' });
   const [showEditApiModal, setShowEditApiModal] = useState(false);
+  // Dependencies state
+  const [dependencies, setDependencies] = useState<any[]>([]);
+  const [showDepModal, setShowDepModal] = useState(false);
+  const [depForm, setDepForm] = useState({ target_api_id: '', dependency_type: 'calls', description: '' });
 
   const isResizing = useRef(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -521,6 +525,10 @@ function App() {
       setApiMethodBreakdown(data.methodBreakdown);
       setDetailTab('summary');
       setSelectedApiId(id);
+      // Fetch dependencies separately
+      const depRes = await fetch(`/api/inventory/dependencies?api_id=${id}`);
+      const depData = await depRes.json();
+      setDependencies(depData);
     } catch (e: any) {
       showToast(e.message, 'error');
     }
@@ -570,6 +578,39 @@ function App() {
   const resetEndpointForm = () => {
     setEndpointForm({ name: '', method: 'GET', path: '/', description: '', request_example: '', response_example: '', error_codes: '', notes: '' });
     setEditingEndpointId(null);
+  };
+
+  const fetchDependencies = async () => {
+    if (!selectedApiId) return;
+    try {
+      const res = await fetch(`/api/inventory/dependencies?api_id=${selectedApiId}`);
+      const data = await res.json();
+      setDependencies(data);
+    } catch (e) { console.error('Failed to fetch dependencies'); }
+  };
+
+  const handleCreateDependency = async () => {
+    if (!selectedApiId || !depForm.target_api_id) return;
+    try {
+      await fetch('/api/inventory/dependencies', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source_api_id: selectedApiId, ...depForm }),
+      });
+      setShowDepModal(false);
+      setDepForm({ target_api_id: '', dependency_type: 'calls', description: '' });
+      fetchDependencies();
+      showToast('Dependency added');
+    } catch (e: any) { showToast(e.message, 'error'); }
+  };
+
+  const handleDeleteDependency = async (id: number) => {
+    if (!confirm('Remove this dependency?')) return;
+    try {
+      await fetch(`/api/inventory/dependencies/${id}`, { method: 'DELETE' });
+      fetchDependencies();
+      showToast('Dependency removed');
+    } catch (e: any) { showToast(e.message, 'error'); }
   };
 
   const handleCreateApi = async () => {
@@ -1975,6 +2016,7 @@ function App() {
           <div className="detail-tabs">
             <button className={`detail-tab ${detailTab === 'summary' ? 'active' : ''}`} onClick={() => setDetailTab('summary')}>Summary</button>
             <button className={`detail-tab ${detailTab === 'endpoints' ? 'active' : ''}`} onClick={() => setDetailTab('endpoints')}>Endpoints ({apiEndpoints.length})</button>
+            <button className={`detail-tab ${detailTab === 'dependencies' ? 'active' : ''}`} onClick={() => { setDetailTab('dependencies'); fetchDependencies(); }}>Dependencies ({dependencies.length})</button>
           </div>
 
           {detailTab === 'summary' && (
@@ -2058,6 +2100,43 @@ function App() {
             </div>
           )}
 
+          {detailTab === 'dependencies' && (
+            <div className="detail-dependencies">
+              <div className="detail-endpoints-header">
+                <h3 style={{margin: 0}}>Dependencies</h3>
+                <button className="send-button" onClick={() => { setDepForm({ target_api_id: '', dependency_type: 'calls', description: '' }); setShowDepModal(true); }}>+ Add Dependency</button>
+              </div>
+              {dependencies.length === 0 && <p style={{color: '#666'}}>No dependencies defined.</p>}
+              {dependencies.length > 0 && (
+                <div className="dependency-graph">
+                  <div className="dep-graph-center">
+                    <div className="dep-node dep-self">
+                      <strong>{apiDetail.name}</strong>
+                    </div>
+                    <div className="dep-arrows">
+                      {dependencies.filter(d => d.source_api_id === selectedApiId).map(d => (
+                        <div key={d.id} className="dep-arrow-row">
+                          <span className="dep-arrow">{'\u2192'}</span>
+                          <span className="dep-type">{d.dependency_type}</span>
+                          <span className="dep-target">{d.target_name}</span>
+                          <button className="delete-item-btn" style={{fontSize: '0.7rem'}} onClick={() => handleDeleteDependency(d.id)}>{'\u00D7'}</button>
+                        </div>
+                      ))}
+                      {dependencies.filter(d => d.target_api_id === selectedApiId).map(d => (
+                        <div key={d.id} className="dep-arrow-row dep-incoming">
+                          <span className="dep-arrow">{'\u2190'}</span>
+                          <span className="dep-type">{d.dependency_type}</span>
+                          <span className="dep-source">{d.source_name}</span>
+                          <button className="delete-item-btn" style={{fontSize: '0.7rem'}} onClick={() => handleDeleteDependency(d.id)}>{'\u00D7'}</button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
           {showEditApiModal && (
             <div className="import-modal-overlay">
               <div className="import-modal">
@@ -2119,6 +2198,33 @@ function App() {
                     {endpointModalMode === 'create' ? 'Add Endpoint' : 'Save Changes'}
                   </button>
                   <button className="send-button" style={{background: 'transparent', border: '1px solid #444'}} onClick={() => { setShowEndpointModal(false); resetEndpointForm(); }}>Cancel</button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {showDepModal && (
+            <div className="import-modal-overlay">
+              <div className="import-modal">
+                <h3>Add Dependency</h3>
+                <div className="modal-form">
+                  <select value={depForm.target_api_id} onChange={(e) => setDepForm({ ...depForm, target_api_id: e.target.value })}>
+                    <option value="">Select target API...</option>
+                    {inventoryApis.filter(a => a.id !== selectedApiId).map(a => (
+                      <option key={a.id} value={a.id}>{a.name}</option>
+                    ))}
+                  </select>
+                  <select value={depForm.dependency_type} onChange={(e) => setDepForm({ ...depForm, dependency_type: e.target.value })}>
+                    <option value="calls">calls</option>
+                    <option value="auth">auth</option>
+                    <option value="data">data</option>
+                    <option value="webhook">webhook</option>
+                  </select>
+                  <input placeholder="Description" value={depForm.description} onChange={(e) => setDepForm({ ...depForm, description: e.target.value })} />
+                </div>
+                <div className="import-modal-actions">
+                  <button className="send-button" onClick={handleCreateDependency}>Add</button>
+                  <button className="send-button" style={{background: 'transparent', border: '1px solid #444'}} onClick={() => setShowDepModal(false)}>Cancel</button>
                 </div>
               </div>
             </div>
