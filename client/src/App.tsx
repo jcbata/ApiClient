@@ -146,7 +146,7 @@ function App() {
 
   // Inventory state
   const [inventoryApis, setInventoryApis] = useState<any[]>([]);
-  const [inventoryStats, setInventoryStats] = useState({ total_apis: 0, active_apis: 0, inactive_apis: 0, total_endpoints: 0, total_dependencies: 0, total_calls: 0, avg_response_time: 0, top_apis: [], recent_activity: [] });
+  const [inventoryStats, setInventoryStats] = useState<any>({ total_apis: 0, active_apis: 0, inactive_apis: 0, total_endpoints: 0, total_dependencies: 0, total_calls: 0, avg_response_time: 0, top_apis: [], recent_activity: [], hourly_calls: [] });
   const [inventoryFilter, setInventoryFilter] = useState({ project: '', status: '', search: '', environment: '' });
   const [showNewApiModal, setShowNewApiModal] = useState(false);
   const [newApiForm, setNewApiForm] = useState({ name: '', description: '', base_url: '', auth_type: 'none', status: 'active', project: 'Default' });
@@ -1830,6 +1830,64 @@ function App() {
             <div className="stat-card"><span className="stat-value" style={{color: '#007acc'}}>{inventoryStats.total_endpoints}</span><span className="stat-label">Endpoints</span></div>
             <div className="stat-card"><span className="stat-value" style={{color: '#9c27b0'}}>{inventoryStats.total_dependencies || 0}</span><span className="stat-label">Dependencies</span></div>
             <div className="stat-card"><span className="stat-value" style={{color: '#e91e63'}}>{inventoryStats.total_calls || 0}</span><span className="stat-label">Total Calls</span></div>
+          </div>
+
+          <div className="dashboard-sections">
+            {inventoryStats.top_apis && inventoryStats.top_apis.length > 0 && (
+              <div className="dashboard-section">
+                <h3>Top APIs by Calls</h3>
+                <div className="top-apis-list">
+                  {inventoryStats.top_apis.map((api: any) => (
+                    <div key={api.id} className="top-api-item" onClick={() => openApiDetail(api.id)}>
+                      <span className="top-api-name">{api.name}</span>
+                      <div className="top-api-bar-container">
+                        <div className="top-api-bar" style={{width: `${Math.min(100, (api.total_calls / Math.max(...inventoryStats.top_apis.map((a: any) => a.total_calls))) * 100)}%`}}></div>
+                      </div>
+                      <span className="top-api-calls">{api.total_calls}</span>
+                      {api.avg_response_time > 0 && <span className="top-api-time">{Math.round(api.avg_response_time)}ms</span>}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {inventoryStats.hourly_calls && inventoryStats.hourly_calls.length > 0 && (
+              <div className="dashboard-section">
+                <h3>Calls by Hour (Last 24h)</h3>
+                <div className="hourly-chart">
+                  {Array.from({length: 24}, (_, i) => {
+                    const h = i.toString().padStart(2, '0');
+                    const entry = inventoryStats.hourly_calls.find((e: any) => e.hour === h);
+                    const count = entry ? entry.count : 0;
+                    const maxCount = Math.max(...inventoryStats.hourly_calls.map((e: any) => e.count), 1);
+                    return (
+                      <div key={i} className="hourly-bar-col">
+                        <div className="hourly-bar-wrapper">
+                          <div className="hourly-bar" style={{height: `${(count / maxCount) * 100}%`}} title={`${h}:00 - ${count} calls`}></div>
+                        </div>
+                        <span className="hourly-label">{i % 3 === 0 ? h : ''}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {inventoryStats.recent_activity && inventoryStats.recent_activity.length > 0 && (
+              <div className="dashboard-section">
+                <h3>Recent Activity</h3>
+                <div className="activity-feed">
+                  {inventoryStats.recent_activity.map((a: any) => (
+                    <div key={a.id} className="activity-feed-item">
+                      <span className={`activity-type activity-${a.activity_type}`}>{a.activity_type}</span>
+                      <span className="activity-api-name">{a.api_name || 'Unknown'}</span>
+                      <span className="activity-detail">{a.detail || ''}</span>
+                      <span className="activity-time">{new Date(a.created_at).toLocaleString()}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="inventory-grid">
