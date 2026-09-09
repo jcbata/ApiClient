@@ -2020,6 +2020,20 @@ function App() {
                 setNewApiForm({ name: apiDetail.name, description: apiDetail.description || '', base_url: apiDetail.base_url || '', auth_type: apiDetail.auth_type || 'none', status: apiDetail.status, project: apiDetail.project });
                 setShowEditApiModal(true);
               }}>Edit</button>
+              <button className="send-button" style={{background: 'transparent', border: '1px solid #444'}} onClick={async () => {
+                try {
+                  const res = await fetch(`/api/inventory/${selectedApiId}/export`);
+                  const data = await res.json();
+                  const blob = new Blob([data.markdown], { type: 'text/markdown' });
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement('a');
+                  a.href = url;
+                  a.download = data.filename;
+                  a.click();
+                  URL.revokeObjectURL(url);
+                  showToast('Documentation exported');
+                } catch (e: any) { showToast(e.message, 'error'); }
+              }}>Export MD</button>
             </div>
           </div>
 
