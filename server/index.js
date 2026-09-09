@@ -371,6 +371,41 @@ app.delete('/api/inventory/:id', (req, res) => {
   });
 });
 
+// Get API detail stats (activity, avg response time, endpoints breakdown)
+app.get('/api/inventory/:id/stats', (req, res) => {
+  const id = req.params.id;
+  db.get(`SELECT * FROM api_inventory WHERE id = ?`, [id], (err, api) => {
+    if (err) return res.status(500).json({ error: err.message });
+    if (!api) return res.status(404).json({ error: 'API not found' });
+
+    db.all(`SELECT * FROM api_endpoints WHERE api_inventory_id = ?`, [id], (err, endpoints) => {
+      if (err) return res.status(500).json({ error: err.message });
+
+      // Group by method
+      const methodBreakdown = {};
+      (endpoints || []).forEach(ep => {
+        methodBreakdown[ep.method] = (methodBreakdown[ep.method] || 0) + 1;
+      });
+
+      // Recent activity from api_activity_log
+      db.all(
+        `SELECT * FROM api_activity_log WHERE api_inventory_id = ? ORDER BY created_at DESC LIMIT 10`,
+        [id],
+        (err, activity) => {
+          if (err) return res.status(500).json({ error: err.message });
+          res.json({
+            api,
+            endpoints,
+            methodBreakdown,
+            activity: activity || [],
+            endpointCount: endpoints ? endpoints.length : 0,
+          });
+        }
+      );
+    });
+  });
+});
+
 // ========== ENDPOINTS CRUD ==========
 
 // List endpoints for an API

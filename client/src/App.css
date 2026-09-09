@@ -1344,3 +1344,166 @@ body {
 .discovery-result-item .schema-badge {
   margin-left: 0.4rem;
 }
+
+/* ========== API DETAIL VIEW ========== */
+.detail-tabs {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid var(--border-color);
+  margin-bottom: 1rem;
+}
+
+.detail-tab {
+  padding: 0.6rem 1.2rem;
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 0.9rem;
+  border-bottom: 2px solid transparent;
+  transition: all 0.15s;
+}
+
+.detail-tab:hover {
+  color: var(--text-main);
+}
+
+.detail-tab.active {
+  color: var(--accent-blue);
+  border-bottom-color: var(--accent-blue);
+  font-weight: 600;
+}
+
+.detail-info-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.detail-info-card {
+  background: var(--bg-dark);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 0.75rem;
+}
+
+.detail-info-label {
+  display: block;
+  font-size: 0.7rem;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  margin-bottom: 0.25rem;
+}
+
+.detail-info-value {
+  display: block;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text-main);
+  word-break: break-all;
+}
+
+.detail-description {
+  margin-bottom: 1rem;
+  font-size: 0.9rem;
+  color: var(--text-dim);
+}
+
+.detail-methods {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  margin-bottom: 1rem;
+}
+
+.detail-activity {
+  margin-top: 1rem;
+}
+
+.detail-activity strong {
+  display: block;
+  margin-bottom: 0.5rem;
+}
+
+.activity-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0;
+  border-bottom: 1px solid var(--border-color);
+  font-size: 0.8rem;
+}
+
+.activity-type {
+  font-weight: 600;
+  text-transform: uppercase;
+  font-size: 0.7rem;
+  min-width: 70px;
+}
+
+.activity-detail {
+  flex: 1;
+  color: var(--text-dim);
+}
+
+.activity-time {
+  color: var(--text-dim);
+  font-size: 0.75rem;
+}
+
+.activity-call { color: var(--accent-blue); }
+.activity-endpoint { color: var(--accent-green); }
+.activity-fail { color: var(--danger); }
+
+/* ========== ENDPOINTS LIST ========== */
+.detail-endpoints-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1rem;
+}
+
+.endpoint-item {
+  background: var(--bg-dark);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 0.75rem;
+  margin-bottom: 0.5rem;
+  transition: border-color 0.15s;
+}
+
+.endpoint-item:hover {
+  border-color: var(--accent-blue);
+}
+
+.endpoint-item-main {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.25rem;
+}
+
+.endpoint-path {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.85rem;
+  color: var(--text-main);
+}
+
+.endpoint-name {
+  color: var(--text-dim);
+  font-size: 0.8rem;
+  margin-left: auto;
+}
+
+.endpoint-desc {
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  margin-bottom: 0.4rem;
+}
+
+.endpoint-actions {
+  display: flex;
+  gap: 0.4rem;
+}

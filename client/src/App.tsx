@@ -159,6 +159,18 @@ function App() {
   const [discoveryEnvForHost, setDiscoveryEnvForHost] = useState<Record<string, string>>({});
   const [newEnvModal, setNewEnvModal] = useState<{ show: boolean; host: string }>({ show: false, host: '' });
   const [newEnvForm, setNewEnvForm] = useState({ name: '', type: 'production', project: 'Default' });
+  // API Detail state
+  const [selectedApiId, setSelectedApiId] = useState<number | null>(null);
+  const [apiDetail, setApiDetail] = useState<any>(null);
+  const [apiEndpoints, setApiEndpoints] = useState<any[]>([]);
+  const [apiActivity, setApiActivity] = useState<any[]>([]);
+  const [apiMethodBreakdown, setApiMethodBreakdown] = useState<Record<string, number>>({});
+  const [detailTab, setDetailTab] = useState<'summary' | 'endpoints'>('summary');
+  const [showEndpointModal, setShowEndpointModal] = useState(false);
+  const [endpointModalMode, setEndpointModalMode] = useState<'create' | 'edit'>('create');
+  const [editingEndpointId, setEditingEndpointId] = useState<number | null>(null);
+  const [endpointForm, setEndpointForm] = useState({ name: '', method: 'GET', path: '/', description: '', request_example: '', response_example: '', error_codes: '', notes: '' });
+  const [showEditApiModal, setShowEditApiModal] = useState(false);
 
   const isResizing = useRef(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -496,6 +508,68 @@ function App() {
     setDiscoveryUrl('');
     setDiscoveryResults([]);
     setDiscoverySelected({});
+  };
+
+  const openApiDetail = async (id: number) => {
+    try {
+      const res = await fetch(`/api/inventory/${id}/stats`);
+      if (!res.ok) throw new Error('Failed to load API detail');
+      const data = await res.json();
+      setApiDetail(data.api);
+      setApiEndpoints(data.endpoints);
+      setApiActivity(data.activity);
+      setApiMethodBreakdown(data.methodBreakdown);
+      setDetailTab('summary');
+      setSelectedApiId(id);
+    } catch (e: any) {
+      showToast(e.message, 'error');
+    }
+  };
+
+  const handleCreateEndpoint = async () => {
+    if (!selectedApiId || !endpointForm.name || !endpointForm.path) { showToast('Name and path are required', 'error'); return; }
+    try {
+      const res = await fetch(`/api/inventory/${selectedApiId}/endpoints`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(endpointForm),
+      });
+      if (!res.ok) throw new Error('Failed to create endpoint');
+      setShowEndpointModal(false);
+      resetEndpointForm();
+      openApiDetail(selectedApiId);
+      showToast('Endpoint created');
+    } catch (e: any) { showToast(e.message, 'error'); }
+  };
+
+  const handleUpdateEndpoint = async () => {
+    if (!editingEndpointId || !endpointForm.name || !endpointForm.path) return;
+    try {
+      const res = await fetch(`/api/inventory/endpoints/${editingEndpointId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(endpointForm),
+      });
+      if (!res.ok) throw new Error('Failed to update endpoint');
+      setShowEndpointModal(false);
+      resetEndpointForm();
+      openApiDetail(selectedApiId!);
+      showToast('Endpoint updated');
+    } catch (e: any) { showToast(e.message, 'error'); }
+  };
+
+  const handleDeleteEndpoint = async (id: number) => {
+    if (!confirm('Delete this endpoint?')) return;
+    try {
+      await fetch(`/api/inventory/endpoints/${id}`, { method: 'DELETE' });
+      openApiDetail(selectedApiId!);
+      showToast('Endpoint deleted');
+    } catch (e: any) { showToast(e.message, 'error'); }
+  };
+
+  const resetEndpointForm = () => {
+    setEndpointForm({ name: '', method: 'GET', path: '/', description: '', request_example: '', response_example: '', error_codes: '', notes: '' });
+    setEditingEndpointId(null);
   };
 
   const handleCreateApi = async () => {
@@ -1714,11 +1788,11 @@ function App() {
           <div className="inventory-grid">
             {inventoryApis.length === 0 && <p style={{color: '#666', gridColumn: '1/-1'}}>No APIs found. Create or discover one to get started.</p>}
             {inventoryApis.map((api) => (
-              <div key={api.id} className="api-card">
+              <div key={api.id} className="api-card" onClick={() => openApiDetail(api.id)} style={{cursor: 'pointer'}}>
                 <div className="api-card-header">
                   <span className={`status-dot ${api.status}`}></span>
                   <strong>{api.name}</strong>
-                  <button className="delete-item-btn" onClick={() => handleDeleteApi(api.id)}>{'\u00D7'}</button>
+                  <button className="delete-item-btn" onClick={(e) => { e.stopPropagation(); handleDeleteApi(api.id); }}>{'\u00D7'}</button>
                 </div>
                 <div className="api-card-body">
                   {api.base_url && <div className="api-card-url">{api.base_url}</div>}
@@ -1866,6 +1940,185 @@ function App() {
                 <div className="import-modal-actions">
                   <button className="send-button" onClick={createNewEnv}>Create Environment</button>
                   <button className="send-button" style={{background: 'transparent', border: '1px solid #444'}} onClick={() => setNewEnvModal({ show: false, host: '' })}>Skip</button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {appMode === 'inventory' && selectedApiId && apiDetail && (
+        <div className="inventory-view api-detail-view">
+          <div className="inventory-header">
+            <div style={{display: 'flex', alignItems: 'center', gap: '0.75rem'}}>
+              <button className="send-button" style={{background: 'transparent', border: '1px solid #444', padding: '0.3rem 0.6rem'}} onClick={() => { setSelectedApiId(null); setApiDetail(null); fetchInventoryApis(); }}>{'\u2190'}</button>
+              <h2 style={{margin: 0}}>{apiDetail.name}</h2>
+              {apiDetail.environment_name && <span className={`env-badge env-${apiDetail.environment_type}`}>{apiDetail.environment_name}</span>}
+              {apiDetail.detected_schema && apiDetail.detected_schema !== 'unknown' && <span className="schema-badge">{apiDetail.detected_schema}</span>}
+              <span className={`api-status-badge ${apiDetail.status}`}>{apiDetail.status}</span>
+            </div>
+            <div style={{display: 'flex', gap: '0.5rem'}}>
+              <button className="send-button" onClick={() => {
+                setUrl(apiDetail.base_url || '');
+                setMethod('GET');
+                setTabName(apiDetail.name);
+                setAppMode('client');
+                showToast('Loaded into Client tab');
+              }}>Open in Client</button>
+              <button className="send-button" style={{background: '#2d6a2d'}} onClick={() => {
+                setNewApiForm({ name: apiDetail.name, description: apiDetail.description || '', base_url: apiDetail.base_url || '', auth_type: apiDetail.auth_type || 'none', status: apiDetail.status, project: apiDetail.project });
+                setShowEditApiModal(true);
+              }}>Edit</button>
+            </div>
+          </div>
+
+          <div className="detail-tabs">
+            <button className={`detail-tab ${detailTab === 'summary' ? 'active' : ''}`} onClick={() => setDetailTab('summary')}>Summary</button>
+            <button className={`detail-tab ${detailTab === 'endpoints' ? 'active' : ''}`} onClick={() => setDetailTab('endpoints')}>Endpoints ({apiEndpoints.length})</button>
+          </div>
+
+          {detailTab === 'summary' && (
+            <div className="detail-summary">
+              <div className="detail-info-grid">
+                <div className="detail-info-card">
+                  <span className="detail-info-label">Base URL</span>
+                  <span className="detail-info-value">{apiDetail.base_url || 'N/A'}</span>
+                </div>
+                <div className="detail-info-card">
+                  <span className="detail-info-label">Auth Type</span>
+                  <span className="detail-info-value">{apiDetail.auth_type || 'none'}</span>
+                </div>
+                <div className="detail-info-card">
+                  <span className="detail-info-label">Project</span>
+                  <span className="detail-info-value">{apiDetail.project}</span>
+                </div>
+                <div className="detail-info-card">
+                  <span className="detail-info-label">Total Calls</span>
+                  <span className="detail-info-value">{apiDetail.total_calls || 0}</span>
+                </div>
+                <div className="detail-info-card">
+                  <span className="detail-info-label">Avg Response</span>
+                  <span className="detail-info-value">{apiDetail.avg_response_time > 0 ? `${Math.round(apiDetail.avg_response_time)}ms` : 'N/A'}</span>
+                </div>
+                <div className="detail-info-card">
+                  <span className="detail-info-label">Endpoints</span>
+                  <span className="detail-info-value">{apiEndpoints.length}</span>
+                </div>
+              </div>
+              {apiDetail.description && <div className="detail-description"><strong>Description:</strong> {apiDetail.description}</div>}
+              {Object.keys(apiMethodBreakdown).length > 0 && (
+                <div className="detail-methods">
+                  <strong>Methods:</strong>
+                  {Object.entries(apiMethodBreakdown).map(([m, c]) => (
+                    <span key={m} className={`method-badge method-${m.toLowerCase()}`}>{m}: {c}</span>
+                  ))}
+                </div>
+              )}
+              {apiActivity.length > 0 && (
+                <div className="detail-activity">
+                  <strong>Recent Activity</strong>
+                  {apiActivity.map((a: any) => (
+                    <div key={a.id} className="activity-item">
+                      <span className={`activity-type activity-${a.activity_type}`}>{a.activity_type}</span>
+                      <span className="activity-detail">{a.detail || ''}</span>
+                      <span className="activity-time">{new Date(a.created_at).toLocaleString()}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {detailTab === 'endpoints' && (
+            <div className="detail-endpoints">
+              <div className="detail-endpoints-header">
+                <h3 style={{margin: 0}}>Endpoints</h3>
+                <button className="send-button" onClick={() => { resetEndpointForm(); setEndpointModalMode('create'); setShowEndpointModal(true); }}>+ Add Endpoint</button>
+              </div>
+              {apiEndpoints.length === 0 && <p style={{color: '#666'}}>No endpoints defined. Add one to start tracking.</p>}
+              {apiEndpoints.map((ep) => (
+                <div key={ep.id} className="endpoint-item">
+                  <div className="endpoint-item-main">
+                    <span className={`method-badge method-${ep.method.toLowerCase()}`}>{ep.method}</span>
+                    <span className="endpoint-path">{ep.path}</span>
+                    <span className="endpoint-name">{ep.name}</span>
+                  </div>
+                  {ep.description && <div className="endpoint-desc">{ep.description}</div>}
+                  <div className="endpoint-actions">
+                    <button className="send-button" style={{padding: '0.2rem 0.5rem', fontSize: '0.75rem'}} onClick={() => {
+                      setEndpointForm({ name: ep.name, method: ep.method, path: ep.path, description: ep.description || '', request_example: ep.request_example || '', response_example: ep.response_example || '', error_codes: ep.error_codes || '', notes: ep.notes || '' });
+                      setEditingEndpointId(ep.id);
+                      setEndpointModalMode('edit');
+                      setShowEndpointModal(true);
+                    }}>Edit</button>
+                    <button className="send-button" style={{padding: '0.2rem 0.5rem', fontSize: '0.75rem', background: 'var(--danger)'}} onClick={() => handleDeleteEndpoint(ep.id)}>Delete</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {showEditApiModal && (
+            <div className="import-modal-overlay">
+              <div className="import-modal">
+                <h3>Edit API</h3>
+                <div className="modal-form">
+                  <input placeholder="API Name" value={newApiForm.name} onChange={(e) => setNewApiForm({ ...newApiForm, name: e.target.value })} />
+                  <input placeholder="Base URL" value={newApiForm.base_url} onChange={(e) => setNewApiForm({ ...newApiForm, base_url: e.target.value })} />
+                  <textarea placeholder="Description" rows={3} value={newApiForm.description} onChange={(e) => setNewApiForm({ ...newApiForm, description: e.target.value })} />
+                  <div style={{display: 'flex', gap: '0.5rem'}}>
+                    <select value={newApiForm.status} onChange={(e) => setNewApiForm({ ...newApiForm, status: e.target.value })}>
+                      <option value="active">Active</option>
+                      <option value="inactive">Inactive</option>
+                      <option value="deprecated">Deprecated</option>
+                    </select>
+                    <select value={newApiForm.auth_type} onChange={(e) => setNewApiForm({ ...newApiForm, auth_type: e.target.value })}>
+                      <option value="none">No Auth</option>
+                      <option value="bearer">Bearer Token</option>
+                      <option value="basic">Basic Auth</option>
+                      <option value="apikey">API Key</option>
+                    </select>
+                    <input placeholder="Project" value={newApiForm.project} onChange={(e) => setNewApiForm({ ...newApiForm, project: e.target.value })} />
+                  </div>
+                </div>
+                <div className="import-modal-actions">
+                  <button className="send-button" onClick={async () => {
+                    try {
+                      await fetch(`/api/inventory/${selectedApiId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(newApiForm) });
+                      setShowEditApiModal(false);
+                      openApiDetail(selectedApiId!);
+                      showToast('API updated');
+                    } catch (e: any) { showToast(e.message, 'error'); }
+                  }}>Save Changes</button>
+                  <button className="send-button" style={{background: 'transparent', border: '1px solid #444'}} onClick={() => setShowEditApiModal(false)}>Cancel</button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {showEndpointModal && (
+            <div className="import-modal-overlay">
+              <div className="import-modal">
+                <h3>{endpointModalMode === 'create' ? 'Add Endpoint' : 'Edit Endpoint'}</h3>
+                <div className="modal-form">
+                  <input placeholder="Endpoint Name *" value={endpointForm.name} onChange={(e) => setEndpointForm({ ...endpointForm, name: e.target.value })} />
+                  <div style={{display: 'flex', gap: '0.5rem'}}>
+                    <select value={endpointForm.method} onChange={(e) => setEndpointForm({ ...endpointForm, method: e.target.value })} style={{width: '100px'}}>
+                      <option>GET</option><option>POST</option><option>PUT</option><option>PATCH</option><option>DELETE</option>
+                    </select>
+                    <input placeholder="Path (e.g. /users/:id)" value={endpointForm.path} onChange={(e) => setEndpointForm({ ...endpointForm, path: e.target.value })} />
+                  </div>
+                  <input placeholder="Description" value={endpointForm.description} onChange={(e) => setEndpointForm({ ...endpointForm, description: e.target.value })} />
+                  <textarea placeholder="Request Example (JSON)" rows={3} value={endpointForm.request_example} onChange={(e) => setEndpointForm({ ...endpointForm, request_example: e.target.value })} />
+                  <textarea placeholder="Response Example (JSON)" rows={3} value={endpointForm.response_example} onChange={(e) => setEndpointForm({ ...endpointForm, response_example: e.target.value })} />
+                  <input placeholder="Error Codes" value={endpointForm.error_codes} onChange={(e) => setEndpointForm({ ...endpointForm, error_codes: e.target.value })} />
+                  <input placeholder="Notes" value={endpointForm.notes} onChange={(e) => setEndpointForm({ ...endpointForm, notes: e.target.value })} />
+                </div>
+                <div className="import-modal-actions">
+                  <button className="send-button" onClick={endpointModalMode === 'create' ? handleCreateEndpoint : handleUpdateEndpoint}>
+                    {endpointModalMode === 'create' ? 'Add Endpoint' : 'Save Changes'}
+                  </button>
+                  <button className="send-button" style={{background: 'transparent', border: '1px solid #444'}} onClick={() => { setShowEndpointModal(false); resetEndpointForm(); }}>Cancel</button>
                 </div>
               </div>
             </div>
