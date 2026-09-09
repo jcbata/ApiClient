@@ -177,6 +177,15 @@ function App() {
   const [dependencies, setDependencies] = useState<any[]>([]);
   const [showDepModal, setShowDepModal] = useState(false);
   const [depForm, setDepForm] = useState({ target_api_id: '', dependency_type: 'calls', description: '' });
+  // Load testing state
+  const [loadTestUrl, setLoadTestUrl] = useState('');
+  const [loadTestMethod, setLoadTestMethod] = useState('GET');
+  const [loadTestHeaders, setLoadTestHeaders] = useState([{ key: '', value: '' }]);
+  const [loadTestBody, setLoadTestBody] = useState('');
+  const [loadTestConcurrent, setLoadTestConcurrent] = useState(5);
+  const [loadTestIterations, setLoadTestIterations] = useState(10);
+  const [loadTestRunning, setLoadTestRunning] = useState(false);
+  const [loadTestResults, setLoadTestResults] = useState<any>(null);
 
   const isResizing = useRef(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -613,6 +622,62 @@ function App() {
       fetchDependencies();
       showToast('Dependency removed');
     } catch (e: any) { showToast(e.message, 'error'); }
+  };
+
+  const runLoadTest = async () => {
+    if (!loadTestUrl) { showToast('URL is required', 'error'); return; }
+    setLoadTestRunning(true);
+    setLoadTestResults(null);
+    const headerObj: Record<string, string> = {};
+    loadTestHeaders.filter(h => h.key).forEach(h => { headerObj[h.key] = h.value; });
+    const results: number[] = [];
+    const errors: number[] = [];
+    const startTime = Date.now();
+    let completed = 0;
+
+    const executeOne = async () => {
+      try {
+        const res = await fetch('/api/execute', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ method: loadTestMethod, url: loadTestUrl, headers: headerObj, data: loadTestBody || undefined }),
+        });
+        const data = await res.json();
+        const time = parseInt(data.time) || 0;
+        results.push(time);
+      } catch {
+        errors.push(completed);
+      }
+      completed++;
+    };
+
+    // Run in batches of concurrent
+    const batches = Math.ceil(loadTestIterations / loadTestConcurrent);
+    for (let b = 0; b < batches; b++) {
+      const count = Math.min(loadTestConcurrent, loadTestIterations - b * loadTestConcurrent);
+      await Promise.all(Array.from({ length: count }, () => executeOne()));
+    }
+
+    const totalTime = Date.now() - startTime;
+    const sorted = [...results].sort((a, b) => a - b);
+    const p50 = sorted[Math.floor(sorted.length * 0.5)] || 0;
+    const p90 = sorted[Math.floor(sorted.length * 0.9)] || 0;
+    const p99 = sorted[Math.floor(sorted.length * 0.99)] || 0;
+    const avg = results.length > 0 ? results.reduce((a, b) => a + b, 0) / results.length : 0;
+
+    setLoadTestResults({
+      totalRequests: loadTestIterations,
+      successful: results.length,
+      failed: errors.length,
+      totalTime,
+      avgTime: Math.round(avg),
+      p50, p90, p99,
+      minTime: sorted[0] || 0,
+      maxTime: sorted[sorted.length - 1] || 0,
+      rps: Math.round((results.length / totalTime) * 1000),
+    });
+    setLoadTestRunning(false);
+    showToast(`Load test complete: ${results.length}/${loadTestIterations} succeeded`);
   };
 
   const handleCreateApi = async () => {
@@ -2315,11 +2380,86 @@ function App() {
       )}
 
       {appMode === 'loadtest' && (
-        <div className="inventory-view">
+        <div className="inventory-view loadtest-view">
           <div className="inventory-header">
             <h2>Load Testing</h2>
           </div>
-          <p style={{color: '#666', padding: '2rem'}}>Coming soon...</p>
+
+          <div className="loadtest-form">
+            <div className="loadtest-url-row">
+              <select value={loadTestMethod} onChange={(e) => setLoadTestMethod(e.target.value)}>
+                <option>GET</option><option>POST</option><option>PUT</option><option>PATCH</option><option>DELETE</option>
+              </select>
+              <input placeholder="URL to test (e.g. https://api.example.com/health)" value={loadTestUrl} onChange={(e) => setLoadTestUrl(e.target.value)} />
+            </div>
+
+            <div className="loadtest-params">
+              <div className="loadtest-param">
+                <label>Concurrent Requests</label>
+                <input type="number" min={1} max={100} value={loadTestConcurrent} onChange={(e) => setLoadTestConcurrent(parseInt(e.target.value) || 1)} />
+              </div>
+              <div className="loadtest-param">
+                <label>Total Iterations</label>
+                <input type="number" min={1} max={1000} value={loadTestIterations} onChange={(e) => setLoadTestIterations(parseInt(e.target.value) || 1)} />
+              </div>
+            </div>
+
+            {(loadTestMethod === 'POST' || loadTestMethod === 'PUT' || loadTestMethod === 'PATCH') && (
+              <textarea placeholder="Request body (optional)" rows={3} value={loadTestBody} onChange={(e) => setLoadTestBody(e.target.value)} style={{width: '100%', background: '#1e1e1e', border: '1px solid #333', color: '#ccc', padding: '0.5rem', fontFamily: 'monospace', fontSize: '0.85rem', borderRadius: '4px'}} />
+            )}
+
+            <button className="send-button" disabled={loadTestRunning} onClick={runLoadTest} style={{width: '100%', marginTop: '0.5rem'}}>
+              {loadTestRunning ? 'Running...' : `Run Load Test (${loadTestIterations} requests)`}
+            </button>
+          </div>
+
+          {loadTestResults && (
+            <div className="loadtest-results">
+              <h3>Results</h3>
+              <div className="loadtest-stats-grid">
+                <div className="loadtest-stat">
+                  <span className="loadtest-stat-label">Total Requests</span>
+                  <span className="loadtest-stat-value">{loadTestResults.totalRequests}</span>
+                </div>
+                <div className="loadtest-stat">
+                  <span className="loadtest-stat-label">Successful</span>
+                  <span className="loadtest-stat-value" style={{color: '#4caf50'}}>{loadTestResults.successful}</span>
+                </div>
+                <div className="loadtest-stat">
+                  <span className="loadtest-stat-label">Failed</span>
+                  <span className="loadtest-stat-value" style={{color: loadTestResults.failed > 0 ? '#f44336' : '#4caf50'}}>{loadTestResults.failed}</span>
+                </div>
+                <div className="loadtest-stat">
+                  <span className="loadtest-stat-label">Requests/sec</span>
+                  <span className="loadtest-stat-value" style={{color: '#007acc'}}>{loadTestResults.rps}</span>
+                </div>
+                <div className="loadtest-stat">
+                  <span className="loadtest-stat-label">Avg Time</span>
+                  <span className="loadtest-stat-value">{loadTestResults.avgTime}ms</span>
+                </div>
+                <div className="loadtest-stat">
+                  <span className="loadtest-stat-label">Min / Max</span>
+                  <span className="loadtest-stat-value">{loadTestResults.minTime}ms / {loadTestResults.maxTime}ms</span>
+                </div>
+                <div className="loadtest-stat">
+                  <span className="loadtest-stat-label">P50</span>
+                  <span className="loadtest-stat-value">{loadTestResults.p50}ms</span>
+                </div>
+                <div className="loadtest-stat">
+                  <span className="loadtest-stat-label">P90</span>
+                  <span className="loadtest-stat-value">{loadTestResults.p90}ms</span>
+                </div>
+                <div className="loadtest-stat">
+                  <span className="loadtest-stat-label">P99</span>
+                  <span className="loadtest-stat-value">{loadTestResults.p99}ms</span>
+                </div>
+                <div className="loadtest-stat">
+                  <span className="loadtest-stat-label">Total Time</span>
+                  <span className="loadtest-stat-value">{(loadTestResults.totalTime / 1000).toFixed(2)}s</span>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>
